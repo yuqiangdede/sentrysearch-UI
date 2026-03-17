@@ -1,0 +1,6 @@
+click>=8.1
+python-dotenv>=1.0
+chromadb>=0.4
+google-genai>=1.0
+ffmpeg-python>=0.2
+imageio-ffmpeg>=0.5

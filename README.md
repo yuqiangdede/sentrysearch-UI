@@ -26,4 +26,4 @@ sentrysearch trim source.mp4 --start 30 --end 45 -o clip.mp4
 ## Requirements
 
 - Python 3.10+
-- ffmpeg installed and available on PATH
+- `ffmpeg` on PATH, or use bundled ffmpeg via `imageio-ffmpeg` (installed by default)
