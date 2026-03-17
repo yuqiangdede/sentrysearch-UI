@@ -1,9 +1,17 @@
 """Click-based CLI entry point."""
 
+import os
+
 import click
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+def _fmt_time(seconds: float) -> str:
+    """Format seconds as MM:SS."""
+    m, s = divmod(int(seconds), 60)
+    return f"{m:02d}:{s:02d}"
 
 
 @click.group()
@@ -11,78 +19,125 @@ def cli():
     """Search dashcam footage using natural language queries."""
 
 
+# -----------------------------------------------------------------------
+# index
+# -----------------------------------------------------------------------
+
 @cli.command()
-@click.argument("path", type=click.Path(exists=True))
-@click.option("--chunk-duration", default=30, help="Chunk duration in seconds.")
-@click.option("--overlap", default=5, help="Overlap between chunks in seconds.")
-def index(path, chunk_duration, overlap):
-    """Index video files from PATH for searching."""
-    import os
+@click.argument("directory", type=click.Path(exists=True, file_okay=True, dir_okay=True))
+@click.option("--chunk-duration", default=30, show_default=True,
+              help="Chunk duration in seconds.")
+@click.option("--overlap", default=5, show_default=True,
+              help="Overlap between chunks in seconds.")
+def index(directory, chunk_duration, overlap):
+    """Index mp4 files in DIRECTORY for searching."""
     from .chunker import chunk_video, scan_directory
-    from .embedder import embed_chunks
+    from .embedder import embed_video_chunk
     from .store import SentryStore
 
-    if os.path.isdir(path):
-        videos = scan_directory(path)
+    if os.path.isfile(directory):
+        videos = [os.path.abspath(directory)]
     else:
-        videos = [path]
+        videos = scan_directory(directory)
 
-    click.echo(f"Found {len(videos)} video(s) to index.")
+    if not videos:
+        click.echo("No mp4 files found.")
+        return
+
     store = SentryStore()
+    total_files = len(videos)
+    new_files = 0
+    new_chunks = 0
 
-    for video_path in videos:
-        abs_path = str(os.path.abspath(video_path))
+    for file_idx, video_path in enumerate(videos, 1):
+        abs_path = os.path.abspath(video_path)
+        basename = os.path.basename(video_path)
+
         if store.is_indexed(abs_path):
-            click.echo(f"Skipping {video_path} (already indexed).")
+            click.echo(f"Skipping ({file_idx}/{total_files}): {basename} (already indexed)")
             continue
-        click.echo(f"Processing {video_path}...")
-        chunks = chunk_video(video_path, chunk_duration=chunk_duration, overlap=overlap)
-        click.echo(f"  Created {len(chunks)} chunk(s).")
-        embedded = embed_chunks(chunks)
+
+        chunks = chunk_video(abs_path, chunk_duration=chunk_duration, overlap=overlap)
+        num_chunks = len(chunks)
+        embedded = []
+
+        for chunk_idx, chunk in enumerate(chunks, 1):
+            click.echo(
+                f"Indexing file {file_idx}/{total_files}: {basename} "
+                f"[chunk {chunk_idx}/{num_chunks}]"
+            )
+            embedding = embed_video_chunk(chunk["chunk_path"])
+            embedded.append({**chunk, "embedding": embedding})
+
         store.add_chunks(embedded)
-        click.echo(f"  Indexed {len(embedded)} chunk(s).")
+        new_files += 1
+        new_chunks += len(embedded)
 
     stats = store.get_stats()
-    click.echo(f"Done. {stats['total_chunks']} chunks from {stats['unique_source_files']} file(s) in store.")
+    click.echo(
+        f"\nIndexed {new_chunks} new chunks from {new_files} files. "
+        f"Total: {stats['total_chunks']} chunks from "
+        f"{stats['unique_source_files']} files."
+    )
 
+
+# -----------------------------------------------------------------------
+# search
+# -----------------------------------------------------------------------
 
 @cli.command()
 @click.argument("query")
-@click.option("-n", "--num-results", default=5, help="Number of results to return.")
-@click.option("--trim-top", type=click.Path(), default=None,
-              help="If set, trim the top result and save to this directory.")
-def search(query, num_results, trim_top):
+@click.option("-n", "--results", "n_results", default=5, show_default=True,
+              help="Number of results to return.")
+@click.option("-o", "--output-dir", default=".", show_default=True,
+              help="Directory to save trimmed clips.")
+@click.option("--trim/--no-trim", default=True, show_default=True,
+              help="Auto-trim the top result.")
+def search(query, n_results, output_dir, trim):
     """Search indexed footage with a natural language QUERY."""
     from .search import search_footage
     from .store import SentryStore
 
     store = SentryStore()
-    results = search_footage(query, store, n_results=num_results)
+    results = search_footage(query, store, n_results=n_results)
+
     if not results:
         click.echo("No results found.")
         return
 
-    for i, result in enumerate(results, 1):
-        click.echo(f"\n--- Result {i} ---")
-        click.echo(f"  Source: {result['source_file']}")
-        click.echo(f"  Time:  {result['start_time']:.1f}s - {result['end_time']:.1f}s")
-        click.echo(f"  Score: {result['similarity_score']:.4f}")
+    for i, r in enumerate(results, 1):
+        basename = os.path.basename(r["source_file"])
+        start_str = _fmt_time(r["start_time"])
+        end_str = _fmt_time(r["end_time"])
+        click.echo(
+            f"  #{i} [{r['similarity_score']:.2f}] {basename} "
+            f"@ {start_str}-{end_str}"
+        )
 
-    if trim_top:
+    if trim:
         from .trimmer import trim_top_result
-        clip_path = trim_top_result(results, trim_top)
-        click.echo(f"\nTrimmed top result to {clip_path}")
+        clip_path = trim_top_result(results, output_dir)
+        click.echo(f"\nSaved clip: {clip_path}")
 
+
+# -----------------------------------------------------------------------
+# stats
+# -----------------------------------------------------------------------
 
 @cli.command()
-@click.argument("video", type=click.Path(exists=True))
-@click.option("--start", required=True, type=float, help="Start time in seconds.")
-@click.option("--end", required=True, type=float, help="End time in seconds.")
-@click.option("-o", "--output", required=True, type=click.Path(), help="Output file path.")
-@click.option("--padding", default=2.0, help="Extra seconds before/after the clip.")
-def trim(video, start, end, output, padding):
-    """Trim a clip from VIDEO between --start and --end seconds."""
-    from .trimmer import trim_clip
+def stats():
+    """Print index statistics."""
+    from .store import SentryStore
 
-    out = trim_clip(video, start, end, output, padding=padding)
-    click.echo(f"Saved clip to {out}")
+    store = SentryStore()
+    s = store.get_stats()
+
+    if s["total_chunks"] == 0:
+        click.echo("Index is empty. Run `sentrysearch index <directory>` first.")
+        return
+
+    click.echo(f"Total chunks:  {s['total_chunks']}")
+    click.echo(f"Source files:  {s['unique_source_files']}")
+    click.echo("\nIndexed files:")
+    for f in s["source_files"]:
+        click.echo(f"  {f}")

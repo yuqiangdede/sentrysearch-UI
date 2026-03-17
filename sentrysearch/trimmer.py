@@ -82,12 +82,17 @@ def trim_clip(
     return output_path
 
 
+def _fmt_time(seconds: float) -> str:
+    """Format seconds as e.g. '02m15s'."""
+    m, s = divmod(int(seconds), 60)
+    return f"{m:02d}m{s:02d}s"
+
+
 def _safe_filename(source_file: str, start: float, end: float) -> str:
     """Build a filesystem-safe descriptive filename."""
     base = os.path.splitext(os.path.basename(source_file))[0]
-    # Strip anything that isn't alphanumeric, dash, or underscore
     base = re.sub(r"[^\w\-]", "_", base)
-    return f"match_{base}_{start:.0f}-{end:.0f}.mp4"
+    return f"match_{base}_{_fmt_time(start)}-{_fmt_time(end)}.mp4"
 
 
 def trim_top_result(results: list[dict], output_dir: str) -> str:
