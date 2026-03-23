@@ -169,6 +169,104 @@ def chunk_video(
     return chunks
 
 
+def is_still_frame_chunk(
+    chunk_path: str,
+    threshold: float = 0.98,
+    verbose: bool = False,
+) -> bool:
+    """Check if a video chunk contains mostly still frames.
+
+    Extracts 3 evenly-spaced frames as JPEG and compares file sizes.
+    Similar JPEG sizes indicate similar visual content (still scene).
+
+    Args:
+        chunk_path: Path to the video chunk.
+        threshold: Minimum size ratio (min/max) to consider frames similar.
+        verbose: Print frame sizes to stderr.
+
+    Returns:
+        True if the chunk appears to be a still/static scene.
+    """
+    try:
+        ffmpeg_exe = _get_ffmpeg_executable()
+
+        # Get total frame count: try parsing "frame=" progress line first,
+        # fall back to duration * fps for ffmpeg 7+ which changed the format.
+        result = subprocess.run(
+            [ffmpeg_exe, "-i", chunk_path, "-map", "0:v:0",
+             "-c", "copy", "-f", "null", "-"],
+            capture_output=True, text=True, check=False,
+        )
+        stderr = result.stderr
+        match = re.search(r"frame=\s*(\d+)", stderr)
+        if match:
+            total_frames = int(match.group(1))
+        else:
+            # Estimate from duration and fps in stream info
+            fps_match = re.search(r"(\d+(?:\.\d+)?)\s+fps", stderr)
+            dur_match = re.search(
+                r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", stderr,
+            )
+            if not fps_match or not dur_match:
+                return False
+            fps = float(fps_match.group(1))
+            h, m, s = dur_match.groups()
+            dur = int(h) * 3600 + int(m) * 60 + float(s)
+            total_frames = int(dur * fps)
+        if total_frames < 3:
+            return False
+
+        f1 = total_frames // 3
+        f2 = 2 * total_frames // 3
+
+        # Extract 3 frames as JPEG
+        tmp_dir = tempfile.mkdtemp(prefix="sentrysearch_still_")
+        out_pattern = os.path.join(tmp_dir, "frame_%03d.jpg")
+
+        subprocess.run(
+            [
+                ffmpeg_exe, "-y",
+                "-i", chunk_path,
+                "-vf", f"select=eq(n\\,0)+eq(n\\,{f1})+eq(n\\,{f2})",
+                "-vsync", "vfr",
+                out_pattern,
+            ],
+            capture_output=True, check=True,
+        )
+
+        # Collect frame file sizes
+        frames = sorted(
+            os.path.join(tmp_dir, f)
+            for f in os.listdir(tmp_dir)
+            if f.endswith(".jpg")
+        )
+        sizes = [os.path.getsize(f) for f in frames]
+
+        # Clean up
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        if len(sizes) < 2:
+            return False
+
+        if verbose:
+            import sys
+            print(
+                "    [verbose] still-detect frame sizes: "
+                + ", ".join(f"{s}B" for s in sizes),
+                file=sys.stderr,
+            )
+
+        min_size = min(sizes)
+        max_size = max(sizes)
+        if max_size == 0:
+            return False
+
+        return min_size / max_size >= threshold
+
+    except Exception:
+        return False
+
+
 def preprocess_chunk(
     chunk_path: str,
     target_resolution: int = 480,

@@ -147,10 +147,12 @@ def init():
               help="Target video height in pixels for preprocessing.")
 @click.option("--target-fps", default=5, show_default=True,
               help="Target frames per second for preprocessing.")
+@click.option("--skip-still/--no-skip-still", default=True, show_default=True,
+              help="Skip chunks with no meaningful visual change.")
 @click.option("--verbose", is_flag=True, help="Show debug info.")
-def index(directory, chunk_duration, overlap, preprocess, target_resolution, target_fps, verbose):
+def index(directory, chunk_duration, overlap, preprocess, target_resolution, target_fps, skip_still, verbose):
     """Index mp4 files in DIRECTORY for searching."""
-    from .chunker import chunk_video, preprocess_chunk, scan_directory
+    from .chunker import chunk_video, is_still_frame_chunk, preprocess_chunk, scan_directory
     from .embedder import embed_video_chunk
     from .store import SentryStore
 
@@ -168,6 +170,7 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution, tar
         total_files = len(videos)
         new_files = 0
         new_chunks = 0
+        skipped_chunks = 0
 
         if verbose:
             click.echo(f"[verbose] DB path: {store._client._identifier}", err=True)
@@ -189,6 +192,15 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution, tar
                 click.echo(f"  [verbose] {basename}: duration split into {num_chunks} chunks", err=True)
 
             for chunk_idx, chunk in enumerate(chunks, 1):
+                if skip_still and is_still_frame_chunk(
+                    chunk["chunk_path"], verbose=verbose,
+                ):
+                    click.echo(
+                        f"Skipping chunk {chunk_idx}/{num_chunks} (still frame)"
+                    )
+                    skipped_chunks += 1
+                    continue
+
                 click.echo(
                     f"Indexing file {file_idx}/{total_files}: {basename} "
                     f"[chunk {chunk_idx}/{num_chunks}]"
@@ -214,13 +226,15 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution, tar
                 embedding = embed_video_chunk(embed_path, verbose=verbose)
                 embedded.append({**chunk, "embedding": embedding})
 
-            store.add_chunks(embedded)
-            new_files += 1
-            new_chunks += len(embedded)
+            if embedded:
+                store.add_chunks(embedded)
+                new_files += 1
+                new_chunks += len(embedded)
 
         stats = store.get_stats()
+        skipped_msg = f" (skipped {skipped_chunks} still)" if skipped_chunks else ""
         click.echo(
-            f"\nIndexed {new_chunks} new chunks from {new_files} files. "
+            f"\nIndexed {new_chunks} new chunks from {new_files} files{skipped_msg}. "
             f"Total: {stats['total_chunks']} chunks from "
             f"{stats['unique_source_files']} files."
         )
