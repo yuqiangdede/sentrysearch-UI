@@ -20,6 +20,7 @@ local = [
     "transformers>=4.45",
     "accelerate",
     "qwen-vl-utils",
+    "decord",
 ]
 local-quantized = [
     "torch>=2.0",
@@ -27,6 +28,7 @@ local-quantized = [
     "transformers>=4.45",
     "accelerate",
     "qwen-vl-utils",
+    "decord",
     "bitsandbytes",
 ]
 
