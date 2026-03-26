@@ -6,3 +6,9 @@ sentrysearch.egg-info/
 clips_output/
 
 dashcam_pb2.py
+
+# Testing
+.pytest_cache/
+htmlcov/
+coverage.xml
+.coverage

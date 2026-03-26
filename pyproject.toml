@@ -19,9 +19,24 @@ dependencies = [
 
 [project.optional-dependencies]
 tesla = ["geopy"]
+test = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
 
 [project.scripts]
 sentrysearch = "sentrysearch.cli:cli"
 
 [tool.setuptools.packages.find]
 include = ["sentrysearch*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+
+[tool.coverage.run]
+source = ["sentrysearch"]
+omit = ["sentrysearch/dashcam_pb2.py"]
+
+[tool.coverage.report]
+show_missing = true
