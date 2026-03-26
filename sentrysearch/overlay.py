@@ -3,7 +3,6 @@
 Burns speed, location, turn-signal, and driving-mode information onto
 a video clip using ffmpeg's ASS subtitle filter (libass).
 
-Overlay design inspired by ExportDash (MIT) — https://github.com/nobig-deals/exportdash.cam
 """
 
 import functools
@@ -141,17 +140,38 @@ _ARROW_L_DRAW = "m 0 -12 l -10 0 0 12 3 12 -7 0 3 -12"
 
 
 def _parse_base_datetime(source_file: str) -> datetime | None:
-    """Parse the base datetime from a Tesla filename."""
+    """Parse the base datetime from a Tesla filename, ffmpeg metadata, or file mtime."""
+    # 1. Try Tesla filename pattern (e.g. 2024-01-15_14-30-00-front.mp4)
     basename = os.path.basename(source_file)
     m = re.match(r"(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})", basename)
-    if not m:
-        return None
+    if m:
+        try:
+            return datetime(
+                int(m.group(1)), int(m.group(2)), int(m.group(3)),
+                int(m.group(4)), int(m.group(5)), int(m.group(6)),
+            )
+        except ValueError:
+            pass
+
+    # 2. Try ffmpeg creation_time metadata
     try:
-        return datetime(
-            int(m.group(1)), int(m.group(2)), int(m.group(3)),
-            int(m.group(4)), int(m.group(5)), int(m.group(6)),
+        ffmpeg_exe = _get_ffmpeg_executable()
+        r = subprocess.run(
+            [ffmpeg_exe, "-i", source_file],
+            capture_output=True, text=True,
         )
-    except ValueError:
+        ct = re.search(r"creation_time\s*:\s*(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})", r.stderr)
+        if ct:
+            raw = ct.group(1).replace("T", " ")
+            return datetime.strptime(raw, "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        pass
+
+    # 3. Fall back to file modification time
+    try:
+        mtime = os.path.getmtime(source_file)
+        return datetime.fromtimestamp(mtime)
+    except OSError:
         return None
 
 

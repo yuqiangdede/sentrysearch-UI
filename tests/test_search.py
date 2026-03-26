@@ -19,6 +19,7 @@ class TestSearchFootage:
         assert results == []
 
     def test_returns_results(self, tmp_store, mock_embed_query):
+        # mock_embed_query returns _fake_embedding(), store a chunk with same vector
         tmp_store.add_chunk("c1", mock_embed_query, {
             "source_file": "video.mp4",
             "start_time": 0.0,

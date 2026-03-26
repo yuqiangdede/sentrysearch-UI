@@ -120,6 +120,10 @@ def chunk_video(
 
     Returns:
         List of dicts with keys: chunk_path, source_file, start_time, end_time.
+
+    Note:
+        The caller is responsible for cleaning up the temporary chunk files
+        returned in chunk_path.
     """
     video_path = str(Path(video_path).resolve())
     if not os.path.isfile(video_path):
@@ -145,6 +149,7 @@ def chunk_video(
             capture_output=True,
             check=True,
         )
+        # Note: Caller is responsible for cleaning up chunk_path files
         return [
             {
                 "chunk_path": chunk_path,

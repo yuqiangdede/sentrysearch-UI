@@ -37,10 +37,12 @@ class TestRateLimiter:
     @patch("sentrysearch.embedder.time.monotonic")
     def test_sleeps_when_limit_reached(self, mock_monotonic, mock_sleep):
         limiter = _RateLimiter(max_per_minute=2)
+        # First two at t=0 and t=1
         mock_monotonic.return_value = 0.0
         limiter.wait()
         mock_monotonic.return_value = 1.0
         limiter.wait()
+        # Third at t=2: window still has 2 requests
         mock_monotonic.return_value = 2.0
         limiter.wait()
         mock_sleep.assert_called_once()
@@ -48,8 +50,8 @@ class TestRateLimiter:
 
     def test_window_slides(self):
         limiter = _RateLimiter(max_per_minute=1)
-        limiter._timestamps.append(time.monotonic() - 61)
-        limiter.wait()
+        limiter._timestamps.append(time.monotonic() - 61)  # expired
+        limiter.wait()  # should not block
         assert len(limiter._timestamps) == 1
 
 
@@ -68,8 +70,8 @@ class TestGetClient:
     def test_creates_client_with_key(self, mock_client_cls):
         with patch.dict(os.environ, {"GEMINI_API_KEY": "test-key-123"}):
             import sentrysearch.embedder as emb
-            emb._client = None
-            _get_client()
+            emb._client = None  # force re-creation
+            client = _get_client()
             mock_client_cls.assert_called_once_with(api_key="test-key-123")
 
 
@@ -139,6 +141,7 @@ class TestEmbedQuery:
         result = embed_query("a red car")
         assert result == fake_values
         assert len(result) == 768
+        mock_client.models.embed_content.assert_called_once()
 
 
 class TestEmbedVideoChunk:

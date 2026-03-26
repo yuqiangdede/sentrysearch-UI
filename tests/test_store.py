@@ -23,7 +23,7 @@ class TestMakeChunkId:
     def test_returns_hex_string(self):
         cid = _make_chunk_id("test.mp4", 0.0)
         assert len(cid) == 16
-        int(cid, 16)
+        int(cid, 16)  # should not raise
 
 
 def _make_embedding(seed: float = 1.0, dim: int = 768) -> list[float]:

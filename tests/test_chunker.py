@@ -59,6 +59,7 @@ class TestGetFfmpegExecutable:
 
     @patch("sentrysearch.chunker.shutil.which", return_value=None)
     def test_raises_when_no_ffmpeg(self, _mock_which):
+        # Setting a module to None in sys.modules makes import raise ImportError
         with patch.dict(sys.modules, {"imageio_ffmpeg": None}):
             with pytest.raises(RuntimeError, match="ffmpeg not found"):
                 _get_ffmpeg_executable()
@@ -99,6 +100,7 @@ class TestChunkVideo:
             assert os.path.isfile(chunk["chunk_path"])
             assert chunk["source_file"] == os.path.abspath(longer_video)
             assert chunk["end_time"] > chunk["start_time"]
+        # Verify step size between chunks
         step = 4 - 1
         for i in range(1, len(chunks)):
             assert chunks[i]["start_time"] == pytest.approx(

@@ -94,7 +94,7 @@ def trim_clip(
         return output_path
 
     # Attempt 3: just copy with output seeking (slower but avoids codec issues)
-    subprocess.run(
+    final_result = subprocess.run(
         [
             ffmpeg_exe,
             "-y",
@@ -105,9 +105,19 @@ def trim_clip(
             output_path,
         ],
         capture_output=True,
-        check=True,
+        text=True,
     )
-    return output_path
+
+    if final_result.returncode == 0 and os.path.isfile(output_path):
+        return output_path
+
+    # All attempts failed - provide helpful error message
+    error_msg = (
+        f"Failed to trim video clip from {source_file}.\n"
+        f"Tried 3 different ffmpeg approaches but none succeeded.\n\n"
+        f"ffmpeg stderr from last attempt:\n{final_result.stderr}"
+    )
+    raise RuntimeError(error_msg)
 
 
 def _fmt_time(seconds: float) -> str:

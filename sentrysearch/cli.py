@@ -2,6 +2,7 @@
 
 import os
 import platform
+import shutil
 import subprocess
 
 import click
@@ -55,6 +56,58 @@ def _handle_error(e: Exception) -> None:
         )
         raise SystemExit(1)
     raise e
+
+
+def _apply_overlay_to_clip(
+    clip_path: str,
+    source_file: str,
+    start_time: float,
+    end_time: float,
+    *,
+    replace: bool = True,
+) -> bool:
+    """Apply Tesla telemetry overlay to a clip. Returns True on success.
+
+    When *replace* is True the overlay is written over *clip_path* in-place.
+    """
+    from .overlay import apply_overlay, get_metadata_samples, reverse_geocode
+
+    samples = get_metadata_samples(source_file, start_time, end_time)
+    if samples is None:
+        click.secho(
+            "No Tesla SEI metadata found — skipping overlay.",
+            fg="yellow", err=True,
+        )
+        return False
+
+    location = None
+    mid = samples[len(samples) // 2]
+    lat = mid.get("latitude_deg", 0.0)
+    lon = mid.get("longitude_deg", 0.0)
+    if lat and lon:
+        click.echo("Reverse geocoding location...")
+        location = reverse_geocode(lat, lon)
+        if location is None:
+            click.secho(
+                "Geocoding failed — continuing without location. "
+                "Install deps with: pip install -e '.[tesla]'",
+                fg="yellow", err=True,
+            )
+
+    overlay_path = clip_path.replace(".mp4", "_overlay.mp4")
+    result_path = apply_overlay(
+        clip_path, overlay_path, samples, location,
+        source_file=source_file,
+        start_time=start_time,
+    )
+    if result_path == overlay_path and os.path.isfile(overlay_path):
+        if replace:
+            os.replace(overlay_path, clip_path)
+        click.echo("Applied Tesla metadata overlay")
+        return True
+
+    click.secho("Overlay failed.", fg="yellow", err=True)
+    return False
 
 
 @click.group()
@@ -190,6 +243,9 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution, tar
             if verbose:
                 click.echo(f"  [verbose] {basename}: duration split into {num_chunks} chunks", err=True)
 
+            # Track files to clean up after processing
+            files_to_cleanup = []
+
             for chunk_idx, chunk in enumerate(chunks, 1):
                 if skip_still and is_still_frame_chunk(
                     chunk["chunk_path"], verbose=verbose,
@@ -198,6 +254,8 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution, tar
                         f"Skipping chunk {chunk_idx}/{num_chunks} (still frame)"
                     )
                     skipped_chunks += 1
+                    # Clean up the skipped chunk file
+                    files_to_cleanup.append(chunk["chunk_path"])
                     continue
 
                 click.echo(
@@ -221,9 +279,26 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution, tar
                             f"({100 * (1 - new_size / original_size):.0f}% reduction)",
                             err=True,
                         )
+                    # Track preprocessed file for cleanup
+                    if embed_path != chunk["chunk_path"]:
+                        files_to_cleanup.append(embed_path)
 
                 embedding = embed_video_chunk(embed_path, verbose=verbose)
                 embedded.append({**chunk, "embedding": embedding})
+                # Clean up chunk file after embedding
+                files_to_cleanup.append(chunk["chunk_path"])
+
+            # Clean up temporary chunk files
+            for f in files_to_cleanup:
+                try:
+                    os.unlink(f)
+                except OSError:
+                    pass
+
+            # Clean up the temporary directory containing chunks
+            if chunks:
+                tmp_dir = os.path.dirname(chunks[0]["chunk_path"])
+                shutil.rmtree(tmp_dir, ignore_errors=True)
 
             if embedded:
                 store.add_chunks(embedded)
@@ -330,49 +405,52 @@ def search(query, n_results, output_dir, trim, threshold, overlay, verbose):
             clip_path = trim_top_result(results, output_dir)
 
             if overlay:
-                from .overlay import apply_overlay, get_metadata_samples, reverse_geocode
-
                 top = results[0]
-                samples = get_metadata_samples(
-                    top["source_file"], top["start_time"], top["end_time"],
+                _apply_overlay_to_clip(
+                    clip_path, top["source_file"],
+                    top["start_time"], top["end_time"],
                 )
-                if samples is None:
-                    click.secho(
-                        "No Tesla SEI metadata found in source file — skipping overlay.",
-                        fg="yellow", err=True,
-                    )
-                else:
-                    location = None
-                    mid = samples[len(samples) // 2]
-                    lat = mid.get("latitude_deg", 0.0)
-                    lon = mid.get("longitude_deg", 0.0)
-                    if lat and lon:
-                        click.echo("Reverse geocoding location...")
-                        location = reverse_geocode(lat, lon)
-                        if location is None:
-                            click.secho(
-                                "Install Tesla overlay dependencies with: "
-                                "pip install -e '.[tesla]'",
-                                fg="yellow", err=True,
-                            )
-
-                    overlay_path = clip_path.replace(".mp4", "_overlay.mp4")
-                    result_path = apply_overlay(
-                        clip_path, overlay_path, samples, location,
-                        source_file=top["source_file"],
-                        start_time=top["start_time"],
-                    )
-                    if result_path == overlay_path and os.path.isfile(overlay_path):
-                        os.replace(overlay_path, clip_path)
-                        click.echo("Applied Tesla metadata overlay")
-                    else:
-                        click.secho("Overlay failed — saving plain clip.", fg="yellow", err=True)
 
             click.echo(f"\nSaved clip: {clip_path}")
             _open_file(clip_path)
 
     except Exception as e:
         _handle_error(e)
+
+
+# -----------------------------------------------------------------------
+# overlay
+# -----------------------------------------------------------------------
+
+@cli.command()
+@click.argument("video", type=click.Path(exists=True, dir_okay=False))
+@click.option("-o", "--output", default=None,
+              help="Output path (default: <video>_overlay.mp4).")
+def overlay(video, output):
+    """Apply Tesla telemetry overlay to a VIDEO file for testing."""
+    from .chunker import _get_video_duration
+
+    video = os.path.abspath(video)
+    if output is None:
+        base, ext = os.path.splitext(video)
+        output = f"{base}_overlay{ext}"
+
+    try:
+        duration = _get_video_duration(video)
+    except Exception as e:
+        _handle_error(e)
+
+    success = _apply_overlay_to_clip(
+        video, video, 0.0, duration, replace=False,
+    )
+    if success:
+        overlay_path = video.replace(".mp4", "_overlay.mp4")
+        if output != overlay_path and os.path.isfile(overlay_path):
+            os.replace(overlay_path, output)
+        click.secho(f"Saved: {output}", fg="green")
+        _open_file(output)
+    else:
+        raise SystemExit(1)
 
 
 # -----------------------------------------------------------------------
