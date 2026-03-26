@@ -4,3 +4,5 @@ __pycache__/
 test_footage/
 sentrysearch.egg-info/
 clips_output/
+
+dashcam_pb2.py

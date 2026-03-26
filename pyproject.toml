@@ -14,7 +14,11 @@ dependencies = [
     "google-genai>=1.0",
     "ffmpeg-python>=0.2",
     "imageio-ffmpeg>=0.5",
+    "protobuf>=4.0",
 ]
+
+[project.optional-dependencies]
+tesla = ["geopy"]
 
 [project.scripts]
 sentrysearch = "sentrysearch.cli:cli"

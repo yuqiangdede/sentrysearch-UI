@@ -3,7 +3,6 @@
 import os
 import platform
 import subprocess
-import sys
 
 import click
 from dotenv import load_dotenv
@@ -257,8 +256,10 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution, tar
               help="Auto-trim the top result.")
 @click.option("--threshold", default=0.41, show_default=True, type=float,
               help="Minimum similarity score to consider a confident match.")
+@click.option("--overlay/--no-overlay", default=False, show_default=True,
+              help="Burn Tesla telemetry overlay (speed, GPS, turn signals) onto trimmed clip.")
 @click.option("--verbose", is_flag=True, help="Show debug info.")
-def search(query, n_results, output_dir, trim, threshold, verbose):
+def search(query, n_results, output_dir, trim, threshold, overlay, verbose):
     """Search indexed footage with a natural language QUERY."""
     from .search import search_footage
     from .store import SentryStore
@@ -327,6 +328,46 @@ def search(query, n_results, output_dir, trim, threshold, verbose):
 
             from .trimmer import trim_top_result
             clip_path = trim_top_result(results, output_dir)
+
+            if overlay:
+                from .overlay import apply_overlay, get_metadata_samples, reverse_geocode
+
+                top = results[0]
+                samples = get_metadata_samples(
+                    top["source_file"], top["start_time"], top["end_time"],
+                )
+                if samples is None:
+                    click.secho(
+                        "No Tesla SEI metadata found in source file — skipping overlay.",
+                        fg="yellow", err=True,
+                    )
+                else:
+                    location = None
+                    mid = samples[len(samples) // 2]
+                    lat = mid.get("latitude_deg", 0.0)
+                    lon = mid.get("longitude_deg", 0.0)
+                    if lat and lon:
+                        click.echo("Reverse geocoding location...")
+                        location = reverse_geocode(lat, lon)
+                        if location is None:
+                            click.secho(
+                                "Install Tesla overlay dependencies with: "
+                                "pip install -e '.[tesla]'",
+                                fg="yellow", err=True,
+                            )
+
+                    overlay_path = clip_path.replace(".mp4", "_overlay.mp4")
+                    result_path = apply_overlay(
+                        clip_path, overlay_path, samples, location,
+                        source_file=top["source_file"],
+                        start_time=top["start_time"],
+                    )
+                    if result_path == overlay_path and os.path.isfile(overlay_path):
+                        os.replace(overlay_path, clip_path)
+                        click.echo("Applied Tesla metadata overlay")
+                    else:
+                        click.secho("Overlay failed — saving plain clip.", fg="yellow", err=True)
+
             click.echo(f"\nSaved clip: {clip_path}")
             _open_file(clip_path)
 

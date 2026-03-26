@@ -88,7 +88,7 @@ $ sentrysearch search "red truck running a stop sign"
 Saved clip: ./match_front_2024-01-15_14-30_02m15s-02m45s.mp4
 ```
 
-If the best result's similarity score is below the confidence threshold (default 0.35), you'll be prompted before trimming:
+If the best result's similarity score is below the confidence threshold (default 0.41), you'll be prompted before trimming:
 
 ```
 No confident match found (best score: 0.28). Show results anyway? [y/N]:
@@ -97,6 +97,36 @@ No confident match found (best score: 0.28). Show results anyway? [y/N]:
 With `--no-trim`, low-confidence results are shown with a note instead of a prompt.
 
 Options: `--results N`, `--output-dir DIR`, `--no-trim` to skip auto-trimming, `--threshold 0.5` to adjust the confidence cutoff.
+
+### Tesla Metadata Overlay
+
+Burn speed, location, and time onto trimmed clips:
+
+```bash
+sentrysearch search "car cutting me off" --overlay
+```
+
+This extracts telemetry embedded in Tesla dashcam files (speed, GPS) and renders a HUD overlay. The overlay shows:
+
+- **Top center:** speed and MPH label on a light gray card
+- **Below card:** date and time (12-hour with AM/PM)
+- **Top left:** city and road name (via reverse geocoding)
+
+![tesla overlay](docs/tesla-overlay.png)
+
+Requirements:
+
+- Tesla firmware 2025.44.25 or later, HW3+
+- SEI metadata is only present in driving footage (not parked/Sentry Mode)
+- Reverse geocoding uses [OpenStreetMap's Nominatim API](https://nominatim.openstreetmap.org/) via geopy (optional)
+
+Install with Tesla overlay support:
+
+```bash
+pip install -e ".[tesla]"
+```
+
+Without geopy, the overlay still works but omits the city/road name.
 
 ### Stats
 
