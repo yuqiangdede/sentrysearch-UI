@@ -215,18 +215,20 @@ def init():
               help="Skip chunks with no meaningful visual change.")
 @click.option("--backend", type=click.Choice(["gemini", "local"]), default="gemini",
               show_default=True, help="Embedding backend to use.")
-@click.option("--model", default="Qwen/Qwen3-VL-Embedding-2B", show_default=True,
+@click.option("--model", default="Qwen/Qwen3-VL-Embedding-8B", show_default=True,
               help="HuggingFace model ID for local backend.")
+@click.option("--quantize/--no-quantize", default=None,
+              help="Enable/disable 4-bit quantization for local backend (default: auto-detect).")
 @click.option("--verbose", is_flag=True, help="Show debug info.")
 def index(directory, chunk_duration, overlap, preprocess, target_resolution,
-          target_fps, skip_still, backend, model, verbose):
+          target_fps, skip_still, backend, model, quantize, verbose):
     """Index mp4 files in DIRECTORY for searching."""
     from .chunker import chunk_video, is_still_frame_chunk, preprocess_chunk, scan_directory
     from .embedder import get_embedder, reset_embedder
     from .store import SentryStore
 
     try:
-        embedder = get_embedder(backend, model=model)
+        embedder = get_embedder(backend, model=model, quantize=quantize)
 
         if os.path.isfile(directory):
             videos = [os.path.abspath(directory)]
@@ -356,10 +358,12 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution,
               help="Burn Tesla telemetry overlay (speed, GPS, turn signals) onto trimmed clip.")
 @click.option("--backend", type=click.Choice(["gemini", "local"]), default=None,
               help="Embedding backend (auto-detected from index if omitted).")
-@click.option("--model", default="Qwen/Qwen3-VL-Embedding-2B", show_default=True,
+@click.option("--model", default="Qwen/Qwen3-VL-Embedding-8B", show_default=True,
               help="HuggingFace model ID for local backend.")
+@click.option("--quantize/--no-quantize", default=None,
+              help="Enable/disable 4-bit quantization for local backend (default: auto-detect).")
 @click.option("--verbose", is_flag=True, help="Show debug info.")
-def search(query, n_results, output_dir, trim, threshold, overlay, backend, model, verbose):
+def search(query, n_results, output_dir, trim, threshold, overlay, backend, model, quantize, verbose):
     """Search indexed footage with a natural language QUERY."""
     from .embedder import get_embedder, reset_embedder
     from .search import search_footage
@@ -381,7 +385,7 @@ def search(query, n_results, output_dir, trim, threshold, overlay, backend, mode
             )
             return
 
-        get_embedder(backend, model=model)
+        get_embedder(backend, model=model, quantize=quantize)
 
         if verbose:
             click.echo(f"  [verbose] backend={backend}, similarity threshold: {threshold}", err=True)
@@ -494,9 +498,10 @@ def overlay(video, output):
 @cli.command()
 def stats():
     """Print index statistics."""
-    from .store import SentryStore
+    from .store import SentryStore, detect_backend
 
-    store = SentryStore()
+    backend = detect_backend() or "gemini"
+    store = SentryStore(backend=backend)
     s = store.get_stats()
 
     if s["total_chunks"] == 0:

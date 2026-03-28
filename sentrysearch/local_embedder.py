@@ -21,11 +21,13 @@ class LocalEmbedder(BaseEmbedder):
 
     def __init__(
         self,
-        model_name: str = "Qwen/Qwen3-VL-Embedding-2B",
+        model_name: str = "Qwen/Qwen3-VL-Embedding-8B",
         dimensions: int = 768,
+        quantize: bool | None = None,
     ):
         self._model_name = model_name
         self._dimensions = dimensions
+        self._quantize = quantize  # None = auto-detect
         self._model = None
         self._processor = None
 
@@ -83,9 +85,13 @@ class LocalEmbedder(BaseEmbedder):
                 file=sys.stderr,
             )
 
-        # Try 4-bit quantization if bitsandbytes is available and on CUDA
+        # 4-bit quantization: explicit flag or auto-detect
         quantization_config = None
-        if device == "cuda":
+        want_quantize = self._quantize
+        if want_quantize is None:
+            # Auto: quantize only if bitsandbytes is installed and on CUDA
+            want_quantize = device == "cuda"
+        if want_quantize and device == "cuda":
             try:
                 import bitsandbytes  # noqa: F401
                 from transformers import BitsAndBytesConfig
@@ -95,7 +101,17 @@ class LocalEmbedder(BaseEmbedder):
                 )
                 print("Using 4-bit quantization (bitsandbytes)", file=sys.stderr)
             except ImportError:
-                pass
+                if self._quantize is True:
+                    raise LocalModelError(
+                        "4-bit quantization requested but bitsandbytes is not installed.\n\n"
+                        "Install with: uv sync --extra local-quantized"
+                    )
+        elif want_quantize and device != "cuda":
+            if self._quantize is True:
+                raise LocalModelError(
+                    "4-bit quantization requires CUDA (NVIDIA GPU). "
+                    f"Current device: {device}"
+                )
 
         # Build the model class dynamically to avoid top-level imports
         _PreTrained = Qwen3VLPreTrainedModel
