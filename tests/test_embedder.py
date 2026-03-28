@@ -189,5 +189,5 @@ class TestEmbedderFactory:
             MockLocal.return_value = mock_instance
             reset_embedder()
             result = get_embedder("local", model="test-model", dimensions=512)
-            MockLocal.assert_called_once_with(model_name="test-model", dimensions=512)
+            MockLocal.assert_called_once_with(model_name="test-model", dimensions=512, quantize=None)
             assert result is mock_instance

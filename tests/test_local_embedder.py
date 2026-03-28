@@ -19,7 +19,7 @@ class TestLocalModelError:
 class TestLocalEmbedderConstruction:
     def test_default_params(self):
         embedder = LocalEmbedder()
-        assert embedder._model_name == "Qwen/Qwen3-VL-Embedding-2B"
+        assert embedder._model_name == "Qwen/Qwen3-VL-Embedding-8B"
         assert embedder._dimensions == 768
         assert embedder._model is None
 
