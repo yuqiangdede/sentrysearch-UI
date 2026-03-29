@@ -2659,8 +2659,8 @@ requires-dist = [
     { name = "torchcodec", marker = "extra == 'local-quantized'", specifier = ">=0.6" },
     { name = "torchvision", marker = "extra == 'local'", specifier = ">=0.15" },
     { name = "torchvision", marker = "extra == 'local-quantized'", specifier = ">=0.15" },
-    { name = "transformers", marker = "extra == 'local'", specifier = ">=4.45" },
-    { name = "transformers", marker = "extra == 'local-quantized'", specifier = ">=4.45" },
+    { name = "transformers", marker = "extra == 'local'", specifier = ">=5.3" },
+    { name = "transformers", marker = "extra == 'local-quantized'", specifier = ">=5.3" },
 ]
 provides-extras = ["tesla", "local", "local-quantized"]
 

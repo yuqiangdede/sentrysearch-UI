@@ -276,8 +276,6 @@ class LocalEmbedder(BaseEmbedder):
             padding=True,
             **video_kwargs,
         )
-        # Remove mm_token_type_ids to avoid transformers 5.x shape mismatch
-        inputs.pop("mm_token_type_ids", None)
         inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
 
         with torch.no_grad():

@@ -17,7 +17,7 @@ tesla = ["geopy"]
 local = [
     "torch>=2.0",
     "torchvision>=0.15",
-    "transformers>=4.45",
+    "transformers>=5.3",
     "accelerate",
     "qwen-vl-utils",
     "torchcodec>=0.6",
@@ -25,7 +25,7 @@ local = [
 local-quantized = [
     "torch>=2.0",
     "torchvision>=0.15",
-    "transformers>=4.45",
+    "transformers>=5.3",
     "accelerate",
     "qwen-vl-utils",
     "torchcodec>=0.6",
