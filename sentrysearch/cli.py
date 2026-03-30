@@ -8,7 +8,11 @@ import subprocess
 import click
 from dotenv import load_dotenv
 
-load_dotenv()
+_ENV_PATH = os.path.join(os.path.expanduser("~"), ".sentrysearch", ".env")
+
+# Load from stable config location first, then cwd as fallback
+load_dotenv(_ENV_PATH)
+load_dotenv()  # cwd .env can override
 
 
 def _fmt_time(seconds: float) -> str:
@@ -101,7 +105,7 @@ def _apply_overlay_to_clip(
         if location is None:
             click.secho(
                 "Geocoding failed — continuing without location. "
-                "Install deps with: uv sync --extra tesla",
+                "Install deps with: uv tool install \".[tesla]\"",
                 fg="yellow", err=True,
             )
 
@@ -133,7 +137,8 @@ def cli():
 @cli.command()
 def init():
     """Set up your Gemini API key for sentrysearch."""
-    env_path = os.path.join(os.getcwd(), ".env")
+    env_path = _ENV_PATH
+    os.makedirs(os.path.dirname(env_path), exist_ok=True)
 
     # Check for existing key
     if os.path.exists(env_path):
@@ -144,7 +149,10 @@ def init():
                 return
 
     api_key = click.prompt(
-        "Enter your Gemini API key (get one at https://aistudio.google.com/apikey)"
+        "Enter your Gemini API key\n"
+        "  Get one at https://aistudio.google.com/apikey\n"
+        "  (input is hidden)",
+        hide_input=True,
     )
 
     # Write/update .env
@@ -192,6 +200,11 @@ def init():
         "Setup complete. You're ready to go — run "
         "`sentrysearch index <directory>` to get started.",
         fg="green",
+    )
+    click.secho(
+        "\nTip: Set a spending limit at https://aistudio.google.com/billing "
+        "to prevent accidental overspending.",
+        fg="yellow",
     )
 
 

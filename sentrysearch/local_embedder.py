@@ -101,8 +101,8 @@ class LocalEmbedder(BaseEmbedder):
         except ImportError as e:
             raise LocalModelError(
                 f"Missing dependencies for local backend: {e}\n\n"
-                "Install with: uv sync --extra local\n"
-                "For 4-bit quantization: uv sync --extra local-quantized"
+                "Install with: uv tool install \".[local]\"\n"
+                "For 4-bit quantization: uv tool install \".[local-quantized]\""
             ) from e
 
         # Check if model is already cached locally
@@ -139,9 +139,12 @@ class LocalEmbedder(BaseEmbedder):
         # 4-bit quantization: explicit flag or auto-detect
         quantization_config = None
         want_quantize = self._quantize
-        if want_quantize is None:
-            # Auto: quantize only if bitsandbytes is installed and on CUDA
-            want_quantize = device == "cuda"
+        if want_quantize is None and device == "cuda":
+            # Auto: only quantize when VRAM is tight for the chosen model
+            vram_gb = torch.cuda.get_device_properties(0).total_mem / (1024 ** 3)
+            # 8B needs ~16 GB in bf16, 2B needs ~4 GB — add headroom
+            needs_gb = 18 if "8B" in self._model_name else 6
+            want_quantize = vram_gb < needs_gb
         if want_quantize and device == "cuda":
             try:
                 import bitsandbytes  # noqa: F401
@@ -155,7 +158,7 @@ class LocalEmbedder(BaseEmbedder):
                 if self._quantize is True:
                     raise LocalModelError(
                         "4-bit quantization requested but bitsandbytes is not installed.\n\n"
-                        "Install with: uv sync --extra local-quantized"
+                        "Install with: uv tool install \".[local-quantized]\""
                     )
         elif want_quantize and device != "cuda":
             if self._quantize is True:
