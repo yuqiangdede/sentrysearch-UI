@@ -7,11 +7,15 @@ SentrySearch — semantic search over dashcam/video footage. Splits videos into 
 ## Commands
 
 ```bash
-# Install dependencies
+# Dev install
 uv sync                          # core deps
 uv sync --group test             # + test deps
-uv sync --extra local-quantized  # + local model deps (4-bit)
-uv sync --extra tesla            # + Tesla overlay deps
+
+# User install (provides `sentrysearch` CLI)
+uv tool install .                       # core (Gemini backend)
+uv tool install ".[local]"              # + local model deps
+uv tool install ".[local-quantized]"    # + local model deps (4-bit)
+uv tool install ".[tesla]"              # + Tesla overlay deps
 
 # Run tests
 uv run pytest
@@ -31,6 +35,7 @@ sentrysearch stats                         # show index info
 
 - **Embedder factory pattern**: `base_embedder.py` (ABC) -> `gemini_embedder.py` + `local_embedder.py`. The factory in `embedder.py` caches a global singleton via `get_embedder(backend)` / `reset_embedder()`.
 - **Store**: `store.py` wraps ChromaDB. Separate collections per backend (`dashcam_chunks` for gemini, `dashcam_chunks_local` for local) to prevent mixing incompatible embeddings.
+- **Video ingestion**: `chunker.py` defines `SUPPORTED_VIDEO_EXTENSIONS` (`.mp4`, `.mov`) and `is_supported_video_file()` for directory scanning. All formats ffmpeg can decode are processable.
 - **Pipeline**: `chunker.py` (split video) -> `embedder.py` (embed chunks) -> `store.py` (persist) -> `search.py` (query) -> `trimmer.py` (extract clip).
 - **Tesla overlay**: `metadata.py` parses SEI NAL units from Tesla firmware, `overlay.py` renders HUD via ASS subtitles.
 
@@ -57,6 +62,6 @@ sentrysearch stats                         # show index info
 - `sentrysearch/gemini_embedder.py` — Gemini API backend with rate limiter and retry logic
 - `sentrysearch/local_embedder.py` — Qwen3-VL local inference backend
 - `sentrysearch/store.py` — ChromaDB wrapper, backend detection, chunk ID generation
-- `sentrysearch/chunker.py` — Video splitting, preprocessing, still-frame detection
+- `sentrysearch/chunker.py` — Video splitting, preprocessing, still-frame detection, directory scanning (.mp4/.mov)
 - `sentrysearch/trimmer.py` — Three-stage ffmpeg clip extraction with fallbacks
 - `tests/conftest.py` — Shared fixtures (mock embedders, tmp store, synthetic videos)
