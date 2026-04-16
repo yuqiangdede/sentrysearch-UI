@@ -2,9 +2,139 @@
 
 import os
 import re
+import shutil
 import subprocess
 
 from .chunker import _get_ffmpeg_executable, _get_video_duration
+
+
+def _get_primary_video_codec(source_file: str) -> str | None:
+    """Return the primary video codec name for *source_file* if available."""
+    ffprobe_exe = shutil.which("ffprobe")
+    if not ffprobe_exe:
+        return None
+
+    result = subprocess.run(
+        [
+            ffprobe_exe,
+            "-v",
+            "quiet",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_name",
+            "-of",
+            "default=nw=1:nk=1",
+            source_file,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    codec = result.stdout.strip().splitlines()[0].strip().lower() if result.stdout.strip() else ""
+    return codec or None
+
+
+def _preview_times(
+    source_file: str,
+    start_time: float | None,
+    end_time: float | None,
+    padding: float,
+) -> tuple[float | None, float | None]:
+    """Clamp preview times and return ``(start, length)``."""
+    if start_time is None or end_time is None:
+        return None, None
+    if end_time <= start_time:
+        raise ValueError(
+            f"end_time ({end_time}) must be greater than start_time ({start_time})."
+        )
+
+    duration = _get_video_duration(source_file)
+    padded_start = max(0.0, start_time - padding)
+    padded_end = min(duration, end_time + padding)
+    return padded_start, padded_end - padded_start
+
+
+def _run_preview_ffmpeg(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
+def create_browser_preview_clip(
+    source_file: str,
+    start_time: float | None,
+    end_time: float | None,
+    output_path: str,
+    padding: float = 2.0,
+) -> str:
+    """Create a browser-friendly MP4 preview clip.
+
+    The preview is always re-encoded into a broadly supported codec so that
+    browser playback works even when the source file uses HEVC or other
+    unsupported codecs.
+    """
+    ffmpeg_exe = _get_ffmpeg_executable()
+    out_dir = os.path.dirname(output_path) or "."
+    os.makedirs(out_dir, exist_ok=True)
+
+    if not os.access(out_dir, os.W_OK):
+        raise PermissionError(
+            f"Cannot write to '{out_dir}'. "
+            f"Use --output-dir to specify a writable directory."
+        )
+
+    preview_start, preview_length = _preview_times(source_file, start_time, end_time, padding)
+    # H.264 is the most broadly supported browser playback target here.
+    primary_codec = "libx264"
+
+    base_cmd = [ffmpeg_exe, "-y"]
+    if preview_start is not None:
+        base_cmd.extend(["-ss", str(preview_start)])
+    base_cmd.extend(["-i", source_file, "-map", "0:v:0", "-an"])
+    if preview_length is not None:
+        base_cmd.extend(["-t", str(preview_length)])
+
+    result = _run_preview_ffmpeg(
+        base_cmd
+        + [
+            "-c:v",
+            primary_codec,
+            "-preset",
+            "ultrafast",
+            "-crf",
+            "30",
+            "-r",
+            "24",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            output_path,
+        ]
+    )
+    if result.returncode == 0 and os.path.isfile(output_path) and os.path.getsize(output_path) > 1024:
+        return output_path
+
+    fallback = _run_preview_ffmpeg(
+        base_cmd
+        + [
+            "-c:v",
+            "mpeg4",
+            "-q:v",
+            "5",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            output_path,
+        ]
+    )
+    if fallback.returncode == 0 and os.path.isfile(output_path) and os.path.getsize(output_path) > 1024:
+        return output_path
+
+    raise RuntimeError(
+        f"Failed to create browser preview clip from {source_file}.\n"
+        f"ffmpeg stderr from last attempt:\n{fallback.stderr}"
+    )
 
 
 def trim_clip(
