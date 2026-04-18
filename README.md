@@ -1,5 +1,7 @@
 # SentrySearch
 
+原始项目来自 [https://github.com/ssrajadh/sentrysearch](https://github.com/ssrajadh/sentrysearch)。
+
 SentrySearch 是一个视频语义检索工具。你输入一句自然语言，它会在视频里找出相关片段，并可以直接裁剪成短视频。
 
 ## 做什么
