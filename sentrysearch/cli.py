@@ -8,11 +8,10 @@ import subprocess
 import click
 from dotenv import load_dotenv
 
-_ENV_PATH = os.path.join(os.path.expanduser("~"), ".sentrysearch", ".env")
+from .paths import CLIPS_DIR, ENV_PATH, resolve_project_path
 
-# Load from stable config location first, then cwd as fallback
-load_dotenv(_ENV_PATH)
-load_dotenv()  # cwd .env can override
+# Load the project-local config if present.
+load_dotenv(ENV_PATH)
 
 
 def _fmt_time(seconds: float) -> str:
@@ -63,6 +62,9 @@ def _handle_error(e: Exception) -> None:
         click.secho("Error: " + str(e), fg="red", err=True)
         raise SystemExit(1)
     if isinstance(e, FileNotFoundError):
+        click.secho("Error: " + str(e), fg="red", err=True)
+        raise SystemExit(1)
+    if isinstance(e, ValueError):
         click.secho("Error: " + str(e), fg="red", err=True)
         raise SystemExit(1)
     if isinstance(e, RuntimeError) and "ffmpeg not found" in str(e).lower():
@@ -143,7 +145,7 @@ def cli():
 @cli.command()
 def init():
     """Set up your Gemini API key for sentrysearch."""
-    env_path = _ENV_PATH
+    env_path = str(ENV_PATH)
     os.makedirs(os.path.dirname(env_path), exist_ok=True)
 
     # Check for existing key
@@ -250,7 +252,7 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution,
         preprocess_chunk,
         scan_directory,
     )
-    from .embedder import get_embedder, reset_embedder
+    from .embedder import get_embedder
     from .local_embedder import detect_default_model, normalize_model_key
     from .store import SentryStore
 
@@ -379,8 +381,6 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution,
 
     except Exception as e:
         _handle_error(e)
-    finally:
-        reset_embedder()
 
 
 # -----------------------------------------------------------------------
@@ -391,7 +391,7 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution,
 @click.argument("query")
 @click.option("-n", "--results", "n_results", default=5, show_default=True,
               help="Number of results to return.")
-@click.option("-o", "--output-dir", default="~/sentrysearch_clips", show_default=True,
+@click.option("-o", "--output-dir", default=str(CLIPS_DIR), show_default=True,
               help="Directory to save trimmed clips.")
 @click.option("--trim/--no-trim", default=True, show_default=True,
               help="Auto-trim the top result.")
@@ -411,12 +411,16 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution,
 @click.option("--verbose", is_flag=True, help="Show debug info.")
 def search(query, n_results, output_dir, trim, save_top, threshold, overlay, backend, model, quantize, verbose):
     """Search indexed footage with a natural language QUERY."""
-    from .embedder import get_embedder, reset_embedder
+    from .embedder import get_embedder
     from .local_embedder import normalize_model_key
     from .search import search_footage
     from .store import SentryStore, detect_index
 
     output_dir = os.path.expanduser(output_dir)
+    if not output_dir:
+        output_dir = str(CLIPS_DIR)
+    output_dir = str(resolve_project_path(output_dir))
+    os.makedirs(output_dir, exist_ok=True)
 
     try:
         # --model implies --backend local
@@ -535,8 +539,6 @@ def search(query, n_results, output_dir, trim, save_top, threshold, overlay, bac
 
     except Exception as e:
         _handle_error(e)
-    finally:
-        reset_embedder()
 
 
 # -----------------------------------------------------------------------

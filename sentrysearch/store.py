@@ -7,8 +7,8 @@ from pathlib import Path
 
 import chromadb
 
-
-DEFAULT_DB_PATH = Path.home() / ".sentrysearch" / "db"
+from .paths import DB_DIR
+DEFAULT_DB_PATH = DB_DIR
 
 
 class BackendMismatchError(RuntimeError):

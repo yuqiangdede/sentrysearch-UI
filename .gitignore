@@ -6,6 +6,7 @@ __pycache__/
 .omx/
 .venv/
 .pytest_cache/
+.sentrysearch/
 
 models/
 uploads/

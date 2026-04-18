@@ -3,6 +3,7 @@
 import os
 import shutil
 import sys
+import subprocess
 from unittest.mock import patch
 
 import pytest
@@ -113,6 +114,59 @@ class TestChunkVideo:
         with pytest.raises(FileNotFoundError):
             chunk_video("/nonexistent/video.mp4")
 
+    def test_falls_back_to_reencode_when_copy_fails(self, tmp_path, monkeypatch):
+        source = tmp_path / "input.mp4"
+        source.write_text("fake")
+        temp_dir = tmp_path / "chunks"
+        temp_dir.mkdir()
+
+        monkeypatch.setattr("sentrysearch.chunker._get_ffmpeg_executable", lambda: "ffmpeg")
+        monkeypatch.setattr("sentrysearch.chunker._get_video_duration", lambda _path: 3.0)
+        monkeypatch.setattr("sentrysearch.chunker.tempfile.mkdtemp", lambda **_kwargs: str(temp_dir))
+
+        def fake_run(cmd, capture_output=True, text=True, check=False):
+            out_path = cmd[-1]
+            if "mpeg4" in cmd:
+                with open(out_path, "wb") as f:
+                    f.write(b"ok")
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="copy failed")
+
+        monkeypatch.setattr("sentrysearch.chunker.subprocess.run", fake_run)
+
+        chunks = chunk_video(str(source), chunk_duration=30, overlap=5)
+        assert len(chunks) == 1
+        assert os.path.isfile(chunks[0]["chunk_path"])
+        shutil.rmtree(os.path.dirname(chunks[0]["chunk_path"]), ignore_errors=True)
+
+    def test_ignores_non_video_streams_when_chunking(self, tmp_path, monkeypatch):
+        source = tmp_path / "input.mp4"
+        source.write_text("fake")
+        temp_dir = tmp_path / "chunks"
+        temp_dir.mkdir()
+        calls = []
+
+        monkeypatch.setattr("sentrysearch.chunker._get_ffmpeg_executable", lambda: "ffmpeg")
+        monkeypatch.setattr("sentrysearch.chunker._get_video_duration", lambda _path: 3.0)
+        monkeypatch.setattr("sentrysearch.chunker.tempfile.mkdtemp", lambda **_kwargs: str(temp_dir))
+
+        def fake_run(cmd, capture_output=True, text=True, check=False):
+            calls.append(cmd)
+            out_path = cmd[-1]
+            if cmd[0] == "ffmpeg" and "-c" in cmd and "copy" in cmd:
+                return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="copy failed")
+            with open(out_path, "wb") as f:
+                f.write(b"ok")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        monkeypatch.setattr("sentrysearch.chunker.subprocess.run", fake_run)
+
+        chunks = chunk_video(str(source), chunk_duration=30, overlap=5)
+        assert len(chunks) == 1
+        assert any("-map" in cmd and "0:v:0" in cmd for cmd in calls)
+        assert any("-an" in cmd for cmd in calls)
+        shutil.rmtree(os.path.dirname(chunks[0]["chunk_path"]), ignore_errors=True)
+
 
 # ---------------------------------------------------------------------------
 # preprocess_chunk
@@ -125,6 +179,24 @@ class TestPreprocessChunk:
         result = preprocess_chunk(str(src), target_resolution=32, target_fps=5)
         assert os.path.isfile(result)
         assert "preprocessed" in result
+
+    def test_disables_audio_during_preprocess(self, tiny_video, tmp_path, monkeypatch):
+        import shutil as sh
+        src = sh.copy2(tiny_video, tmp_path / "input.mp4")
+        calls = []
+
+        def fake_run(cmd, capture_output=True, check=False):
+            calls.append(cmd)
+            out_path = cmd[-1]
+            with open(out_path, "wb") as f:
+                f.write(b"ok")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        monkeypatch.setattr("sentrysearch.chunker.subprocess.run", fake_run)
+
+        result = preprocess_chunk(str(src), target_resolution=32, target_fps=5)
+        assert os.path.isfile(result)
+        assert any("-an" in cmd for cmd in calls)
 
     def test_falls_back_on_invalid_input(self, tmp_path):
         fake = tmp_path / "not_a_video.mp4"

@@ -15,10 +15,12 @@ from .chunker import (
     preprocess_chunk,
     scan_directory,
 )
-from .embedder import get_embedder, reset_embedder
+from .embedder import get_embedder
 from .local_embedder import detect_default_model, normalize_model_key
 from .overlay import apply_overlay, get_metadata_samples, reverse_geocode
 from .search import search_footage
+from .reranker import get_reranker
+from .paths import CLIPS_DIR, resolve_project_path, ensure_dir
 from .store import SentryStore, detect_index
 from .trimmer import trim_clip
 
@@ -75,21 +77,30 @@ def resolve_search_backend_model(
 
 def get_stats(backend: str | None = None, model: str | None = None) -> dict:
     """Return index statistics with backend/model info."""
-    if model is not None and backend is None:
-        backend = "local"
-    if backend is None:
-        backend, detected_model = detect_index()
-        backend = backend or "gemini"
-        if model is None:
-            model = detected_model
+    try:
+        if model is not None and backend is None:
+            backend = "local"
+        if backend is None:
+            backend, detected_model = detect_index()
+            backend = backend or "gemini"
+            if model is None:
+                model = detected_model
 
-    store = SentryStore(backend=backend, model=model)
-    stats = store.get_stats()
-    return {
-        **stats,
-        "backend": store.get_backend(),
-        "model": store.get_model(),
-    }
+        store = SentryStore(backend=backend, model=model)
+        stats = store.get_stats()
+        return {
+            **stats,
+            "backend": store.get_backend(),
+            "model": store.get_model(),
+        }
+    except Exception:
+        return {
+            "total_chunks": 0,
+            "unique_source_files": 0,
+            "source_files": [],
+            "backend": backend or "gemini",
+            "model": model,
+        }
 
 
 def get_video_index_status(
@@ -101,8 +112,11 @@ def get_video_index_status(
     """Return index status mapping for specific source files."""
     normalized = [os.path.abspath(p) for p in source_files]
     backend, model = resolve_index_backend_model(backend, model)
-    store = SentryStore(backend=backend, model=model)
-    status = {path: store.is_indexed(path) for path in normalized}
+    try:
+        store = SentryStore(backend=backend, model=model)
+        status = {path: store.is_indexed(path) for path in normalized}
+    except Exception:
+        status = {}
     return {
         "backend": backend,
         "model": model,
@@ -149,155 +163,150 @@ def run_index(
     backend, model = resolve_index_backend_model(backend, model)
     _notify(progress_callback, phase="starting", backend=backend, model=model)
 
-    try:
-        get_embedder(backend, model=model, quantize=quantize)
-        if os.path.isfile(directory):
-            videos = [os.path.abspath(directory)]
-        else:
-            videos = scan_directory(directory)
+    get_embedder(backend, model=model, quantize=quantize)
+    if os.path.isfile(directory):
+        videos = [os.path.abspath(directory)]
+    else:
+        videos = scan_directory(directory)
 
-        if not videos:
-            return {
-                "indexed_chunks": 0,
-                "indexed_files": 0,
-                "skipped_chunks": 0,
-                "total_chunks": 0,
-                "unique_source_files": 0,
-                "source_files": [],
-                "backend": backend,
-                "model": model,
-                "supported_extensions": SUPPORTED_VIDEO_EXTENSIONS,
-            }
+    if not videos:
+        return {
+            "indexed_chunks": 0,
+            "indexed_files": 0,
+            "skipped_chunks": 0,
+            "total_chunks": 0,
+            "unique_source_files": 0,
+            "source_files": [],
+            "backend": backend,
+            "model": model,
+            "supported_extensions": SUPPORTED_VIDEO_EXTENSIONS,
+        }
 
-        store = SentryStore(backend=backend, model=model)
-        total_files = len(videos)
-        indexed_files = 0
-        indexed_chunks = 0
-        skipped_chunks = 0
-        rebuilt_files = 0
-        removed_chunks = 0
-        processed_files = 0
-        processed_chunks = 0
-        total_chunks_estimate = 0
+    store = SentryStore(backend=backend, model=model)
+    total_files = len(videos)
+    indexed_files = 0
+    indexed_chunks = 0
+    skipped_chunks = 0
+    rebuilt_files = 0
+    removed_chunks = 0
+    processed_files = 0
+    processed_chunks = 0
+    total_chunks_estimate = 0
 
-        for file_idx, video_path in enumerate(videos, 1):
-            abs_path = os.path.abspath(video_path)
-            basename = os.path.basename(video_path)
+    for file_idx, video_path in enumerate(videos, 1):
+        abs_path = os.path.abspath(video_path)
+        basename = os.path.basename(video_path)
 
-            if store.is_indexed(abs_path):
-                if force_reindex:
-                    removed = store.remove_file(abs_path)
-                    removed_chunks += removed
-                    rebuilt_files += 1
-                    _notify(
-                        progress_callback,
-                        phase="indexing",
-                        current_file=basename,
-                        file_index=file_idx,
-                        total_files=total_files,
-                        processed_files=processed_files,
-                        processed_chunks=processed_chunks,
-                        total_chunks_estimate=total_chunks_estimate,
-                        reindexing=True,
-                        removed_chunks=removed,
-                    )
-                else:
-                    processed_files += 1
-                    _notify(
-                        progress_callback,
-                        phase="indexing",
-                        current_file=basename,
-                        file_index=file_idx,
-                        total_files=total_files,
-                        processed_files=processed_files,
-                        processed_chunks=processed_chunks,
-                        total_chunks_estimate=total_chunks_estimate,
-                        skipped=True,
-                    )
-                    continue
-
-            chunks = chunk_video(abs_path, chunk_duration=chunk_duration, overlap=overlap)
-            total_chunks_estimate += len(chunks)
-            embedded = []
-            files_to_cleanup = []
-
-            for chunk_idx, chunk in enumerate(chunks, 1):
-                file_progress_percent = int((chunk_idx / len(chunks)) * 100)
+        if store.is_indexed(abs_path):
+            if force_reindex:
+                removed = store.remove_file(abs_path)
+                removed_chunks += removed
+                rebuilt_files += 1
                 _notify(
                     progress_callback,
                     phase="indexing",
                     current_file=basename,
                     file_index=file_idx,
                     total_files=total_files,
-                    current_chunk=chunk_idx,
-                    total_chunks_in_file=len(chunks),
-                    file_progress_percent=file_progress_percent,
                     processed_files=processed_files,
                     processed_chunks=processed_chunks,
                     total_chunks_estimate=total_chunks_estimate,
+                    reindexing=True,
+                    removed_chunks=removed,
                 )
-                if skip_still and is_still_frame_chunk(chunk["chunk_path"], verbose=verbose):
-                    skipped_chunks += 1
-                    processed_chunks += 1
-                    files_to_cleanup.append(chunk["chunk_path"])
-                    continue
+            else:
+                processed_files += 1
+                _notify(
+                    progress_callback,
+                    phase="indexing",
+                    current_file=basename,
+                    file_index=file_idx,
+                    total_files=total_files,
+                    processed_files=processed_files,
+                    processed_chunks=processed_chunks,
+                    total_chunks_estimate=total_chunks_estimate,
+                    skipped=True,
+                )
+                continue
 
-                embed_path = chunk["chunk_path"]
-                if preprocess:
-                    embed_path = preprocess_chunk(
-                        embed_path,
-                        target_resolution=target_resolution,
-                        target_fps=target_fps,
-                    )
-                    if embed_path != chunk["chunk_path"]:
-                        files_to_cleanup.append(embed_path)
+        chunks = chunk_video(abs_path, chunk_duration=chunk_duration, overlap=overlap)
+        total_chunks_estimate += len(chunks)
+        embedded = []
+        files_to_cleanup = []
 
-                embedding = get_embedder().embed_video_chunk(embed_path, verbose=verbose)
-                embedded.append({**chunk, "embedding": embedding})
+        for chunk_idx, chunk in enumerate(chunks, 1):
+            file_progress_percent = int((chunk_idx / len(chunks)) * 100)
+            _notify(
+                progress_callback,
+                phase="indexing",
+                current_file=basename,
+                file_index=file_idx,
+                total_files=total_files,
+                current_chunk=chunk_idx,
+                total_chunks_in_file=len(chunks),
+                file_progress_percent=file_progress_percent,
+                processed_files=processed_files,
+                processed_chunks=processed_chunks,
+                total_chunks_estimate=total_chunks_estimate,
+            )
+            if skip_still and is_still_frame_chunk(chunk["chunk_path"], verbose=verbose):
+                skipped_chunks += 1
                 processed_chunks += 1
                 files_to_cleanup.append(chunk["chunk_path"])
+                continue
 
-            for f in files_to_cleanup:
-                try:
-                    os.unlink(f)
-                except OSError:
-                    pass
-            if chunks:
-                tmp_dir = os.path.dirname(chunks[0]["chunk_path"])
-                shutil.rmtree(tmp_dir, ignore_errors=True)
+            embed_path = chunk["chunk_path"]
+            if preprocess:
+                embed_path = preprocess_chunk(
+                    embed_path,
+                    target_resolution=target_resolution,
+                    target_fps=target_fps,
+                )
+                if embed_path != chunk["chunk_path"]:
+                    files_to_cleanup.append(embed_path)
 
-            if embedded:
-                store.add_chunks(embedded)
-                indexed_files += 1
-                indexed_chunks += len(embedded)
+            embedding = get_embedder().embed_video_chunk(embed_path, verbose=verbose)
+            embedded.append({**chunk, "embedding": embedding})
+            processed_chunks += 1
+            files_to_cleanup.append(chunk["chunk_path"])
 
-            processed_files += 1
+        for f in files_to_cleanup:
+            try:
+                os.unlink(f)
+            except OSError:
+                pass
+        if chunks:
+            tmp_dir = os.path.dirname(chunks[0]["chunk_path"])
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
-        stats = store.get_stats()
-        _notify(
-            progress_callback,
-            phase="completed",
-            processed_files=processed_files,
-            total_files=total_files,
-            processed_chunks=processed_chunks,
-            total_chunks_estimate=total_chunks_estimate,
-        )
-        return {
-            "indexed_chunks": indexed_chunks,
-            "indexed_files": indexed_files,
-            "skipped_chunks": skipped_chunks,
-            "rebuilt_files": rebuilt_files,
-            "removed_chunks": removed_chunks,
-            "total_chunks": stats["total_chunks"],
-            "unique_source_files": stats["unique_source_files"],
-            "source_files": stats["source_files"],
-            "backend": backend,
-            "model": model,
-        }
-    finally:
-        reset_embedder()
+        if embedded:
+            store.add_chunks(embedded)
+            indexed_files += 1
+            indexed_chunks += len(embedded)
 
+        processed_files += 1
 
+    stats = store.get_stats()
+    _notify(
+        progress_callback,
+        phase="completed",
+        processed_files=processed_files,
+        total_files=total_files,
+        processed_chunks=processed_chunks,
+        total_chunks_estimate=total_chunks_estimate,
+    )
+    return {
+        "indexed_chunks": indexed_chunks,
+        "indexed_files": indexed_files,
+        "skipped_chunks": skipped_chunks,
+        "rebuilt_files": rebuilt_files,
+        "removed_chunks": removed_chunks,
+        "total_chunks": stats["total_chunks"],
+        "unique_source_files": stats["unique_source_files"],
+        "source_files": stats["source_files"],
+        "backend": backend,
+        "model": model,
+    }
 def get_index_rebuild_candidates(
     directory: str,
     *,
@@ -326,62 +335,86 @@ def run_search(
     query: str,
     *,
     n_results: int = 5,
+    recall: int | None = None,
     threshold: float = 0.41,
     backend: str | None = None,
     model: str | None = None,
     quantize: bool | None = None,
+    rerank: bool = False,
     verbose: bool = False,
 ) -> dict:
     """Run query search and return normalized result payload."""
     backend, model = resolve_search_backend_model(backend, model)
-    try:
-        store = SentryStore(backend=backend, model=model)
-        if store.get_stats()["total_chunks"] == 0:
-            detected_backend, detected_model = detect_index()
-            if detected_backend == backend and detected_model and detected_model != model:
-                message = (
-                    f"No footage indexed with model '{model}'. "
-                    f"Current index uses '{detected_model}'."
-                )
-            elif detected_backend and detected_backend != backend:
-                message = (
-                    f"No footage indexed with backend '{backend}'. "
-                    f"Current index uses '{detected_backend}'."
-                )
-            else:
-                message = "No indexed footage found. Run index first."
-            return {
+    store = SentryStore(backend=backend, model=model)
+    requested_results = max(1, n_results)
+    candidate_results = recall if recall is not None else requested_results * 5
+    candidate_results = max(candidate_results, requested_results)
+    if store.get_stats()["total_chunks"] == 0:
+        detected_backend, detected_model = detect_index()
+        if detected_backend == backend and detected_model and detected_model != model:
+            message = (
+                f"No footage indexed with model '{model}'. "
+                f"Current index uses '{detected_model}'."
+            )
+        elif detected_backend and detected_backend != backend:
+            message = (
+                f"No footage indexed with backend '{backend}'. "
+                f"Current index uses '{detected_backend}'."
+            )
+        else:
+            message = "No indexed footage found. Run index first."
+        return {
                 "results": [],
                 "backend": backend,
                 "model": model,
                 "threshold": threshold,
-                "best_score": None,
-                "low_confidence": False,
-                "message": message,
-            }
-
-        get_embedder(backend, model=model, quantize=quantize)
-        results = search_footage(query, store, n_results=n_results, verbose=verbose)
-        best_score = results[0]["similarity_score"] if results else None
-        low_confidence = bool(best_score is not None and best_score < threshold)
-        return {
-            "results": results,
-            "backend": backend,
-            "model": model,
-            "threshold": threshold,
-            "best_score": best_score,
-            "low_confidence": low_confidence,
-            "message": "" if results else "No results found.",
+            "best_score": None,
+            "low_confidence": False,
+            "message": message,
         }
-    finally:
-        reset_embedder()
+
+    get_embedder(backend, model=model, quantize=quantize)
+
+    results = search_footage(query, store, n_results=candidate_results, verbose=verbose)
+
+    if rerank and results:
+        reranker = get_reranker()
+        reranked = reranker.rerank(query, results)
+        results = [
+            {
+                **{k: v for k, v in item.items() if k != "rerank_score"},
+                "vector_score": item["similarity_score"],
+                "similarity_score": item["rerank_score"],
+            }
+            for item in reranked[:requested_results]
+        ]
+    else:
+        results = [
+            {
+                **item,
+                "vector_score": item["similarity_score"],
+            }
+            for item in results[:requested_results]
+        ]
+
+    best_score = results[0]["similarity_score"] if results else None
+    low_confidence = bool(best_score is not None and best_score < threshold)
+    return {
+        "results": results,
+        "backend": backend,
+        "model": model,
+        "threshold": threshold,
+        "best_score": best_score,
+        "low_confidence": low_confidence,
+        "message": "" if results else "No results found.",
+    }
 
 
 def run_trim(
     *,
     results: list[dict],
     selected_indices: list[int],
-    output_dir: str = "~/sentrysearch_clips",
+    output_dir: str = str(CLIPS_DIR),
     overlay: bool = False,
     progress_callback: ProgressCallback | None = None,
 ) -> dict:
@@ -397,7 +430,8 @@ def run_trim(
             raise ValueError(f"selected index out of range: {idx}")
 
     output_dir = os.path.expanduser(output_dir)
-    os.makedirs(output_dir, exist_ok=True)
+    resolved_output_dir = resolve_project_path(output_dir)
+    ensure_dir(resolved_output_dir)
 
     clips: list[str] = []
     for item_idx, idx in enumerate(unique_indices, start=1):
@@ -410,7 +444,7 @@ def run_trim(
             source_file=item["source_file"],
         )
         output_name = _safe_filename(item["source_file"], item["start_time"], item["end_time"])
-        output_path = os.path.join(output_dir, output_name)
+        output_path = os.path.join(str(resolved_output_dir), output_name)
         clip_path = trim_clip(
             source_file=item["source_file"],
             start_time=item["start_time"],
@@ -426,7 +460,7 @@ def run_trim(
             )
         clips.append(clip_path)
     _notify(progress_callback, phase="completed", total=len(unique_indices))
-    return {"output_dir": output_dir, "clips": clips}
+    return {"output_dir": str(resolved_output_dir), "clips": clips}
 
 
 def _notify(progress_callback: ProgressCallback | None, **payload) -> None:

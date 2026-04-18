@@ -143,6 +143,15 @@ class TestVideoReaderBackend:
             backend = _ensure_qwen_video_reader_backend()
             assert backend == "torchvision"
 
+    def test_falls_back_to_torchvision_when_decord_missing(self):
+        with patch.dict(os.environ, {}, clear=True), patch(
+            "sentrysearch.local_embedder.importlib.util.find_spec",
+            return_value=None,
+        ):
+            backend = _ensure_qwen_video_reader_backend()
+            assert backend == "torchvision"
+            assert os.environ["FORCE_QWENVL_VIDEO_READER"] == "torchvision"
+
 
 class TestLocalEmbedderMethods:
     def test_embed_query_calls_load_model(self):

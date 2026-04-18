@@ -18,6 +18,10 @@ dependencies = [
 
 [project.optional-dependencies]
 tesla = ["geopy"]
+download = [
+    "huggingface_hub>=0.23",
+    "modelscope>=1.35",
+]
 local = [
     "torch>=2.0",
     "torchvision>=0.15,<0.22",

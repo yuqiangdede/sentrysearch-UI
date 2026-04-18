@@ -11,8 +11,9 @@ from collections import deque
 from dotenv import load_dotenv
 
 from .base_embedder import BaseEmbedder
+from .paths import ENV_PATH
 
-load_dotenv()
+load_dotenv(ENV_PATH)
 
 EMBED_MODEL = "gemini-embedding-2-preview"
 DIMENSIONS = 768

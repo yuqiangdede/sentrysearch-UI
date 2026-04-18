@@ -1,10 +1,11 @@
 """Tests for sentrysearch.store."""
 
 import math
+from pathlib import Path
 
 import pytest
 
-from sentrysearch.store import _make_chunk_id
+from sentrysearch.store import DEFAULT_DB_PATH, _make_chunk_id
 
 
 class TestMakeChunkId:
@@ -24,6 +25,12 @@ class TestMakeChunkId:
         cid = _make_chunk_id("test.mp4", 0.0)
         assert len(cid) == 16
         int(cid, 16)  # should not raise
+
+
+class TestDefaultDbPath:
+    def test_default_db_path_is_project_local(self):
+        project_root = Path(__file__).resolve().parents[1]
+        assert DEFAULT_DB_PATH == project_root / ".sentrysearch" / "db"
 
 
 def _make_embedding(seed: float = 1.0, dim: int = 768) -> list[float]:

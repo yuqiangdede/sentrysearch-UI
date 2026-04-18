@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from sentrysearch.webapp import create_app
+from sentrysearch.reranker import RerankerError
 
 
 def _wait_job(client: TestClient, job_id: str, timeout: float = 3.0) -> dict:
@@ -37,6 +38,32 @@ def test_stats_endpoint_empty(monkeypatch):
     data = resp.json()
     assert data["total_chunks"] == 0
     assert data["backend"] == "gemini"
+
+
+def test_home_page_contains_index_page_content():
+    client = TestClient(create_app())
+    resp = client.get("/")
+    assert resp.status_code == 200
+    html = resp.text
+    assert 'id="idxEngine"' in html
+    assert '<option value="qwen8b">Qwen3-VL-Embedding-8B 本地</option>' in html
+    assert 'id="idxQuantize" type="checkbox" checked' in html
+    assert 'id="searchEngine"' not in html
+
+
+def test_search_page_contains_search_page_content():
+    client = TestClient(create_app())
+    resp = client.get("/search")
+    assert resp.status_code == 200
+    html = resp.text
+    assert 'id="searchEngine"' in html
+    assert 'id="searchRecall"' in html
+    assert 'id="searchRecall" type="number" min="1" value="25"' in html
+    assert 'id="searchRerank" type="checkbox" checked' in html
+    assert 'id="searchQuantize" type="checkbox" checked' in html
+    assert 'searchParams.set("start"' in html
+    assert 'searchParams.set("end"' in html
+    assert 'id="idxEngine"' not in html
 
 
 def test_stats_endpoint_with_data(monkeypatch):
@@ -89,11 +116,77 @@ def test_upload_rejects_invalid_extension(monkeypatch, tmp_path):
 
 
 def test_search_endpoint_and_validation(monkeypatch):
+    calls = []
+
+    def _fake_run_search(**kwargs):
+        calls.append(kwargs)
+        return {
+            "results": [{
+                "source_file": "/tmp/a.mp4",
+                "start_time": 1.0,
+                "end_time": 4.0,
+                "similarity_score": 0.9,
+                "vector_score": 0.7,
+            }],
+            "backend": "local",
+            "model": "qwen2b",
+            "threshold": kwargs["threshold"],
+            "best_score": 0.9,
+            "low_confidence": False,
+            "message": "",
+        }
+
+    monkeypatch.setattr(
+        "sentrysearch.webapp.run_search",
+        _fake_run_search,
+    )
+    client = TestClient(create_app())
+
+    ok = client.post(
+        "/api/search",
+        json={"query": "red car", "results": 3, "recall": 15, "threshold": 0.41, "rerank": True},
+    )
+    assert ok.status_code == 200
+    payload = ok.json()
+    assert len(payload["results"]) == 1
+    assert payload["results"][0]["similarity_score"] == 0.9
+    assert payload["results"][0]["preview_url"].startswith("/api/media/")
+    assert payload["results"][0]["vector_score"] == 0.7
+    assert calls[0]["n_results"] == 3
+    assert calls[0]["recall"] == 15
+    assert calls[0]["rerank"] is True
+
+    preview = client.get(payload["results"][0]["preview_url"])
+    assert preview.status_code == 404  # token exists but source file in test is synthetic path
+
+    bad = client.post("/api/search", json={"query": ""})
+    assert bad.status_code == 422
+
+
+def test_media_endpoint_generates_browser_preview(monkeypatch, tmp_path):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source-video")
+    captured = {}
+
+    def _fake_create_browser_preview_clip(*, source_file, start_time, end_time, output_path, padding=2.0):
+        captured.update(
+            {
+                "source_file": source_file,
+                "start_time": start_time,
+                "end_time": end_time,
+                "output_path": output_path,
+                "padding": padding,
+            }
+        )
+        Path(output_path).write_bytes(b"preview-bytes")
+        return output_path
+
+    monkeypatch.setattr("sentrysearch.webapp.create_browser_preview_clip", _fake_create_browser_preview_clip)
     monkeypatch.setattr(
         "sentrysearch.webapp.run_search",
         lambda **kwargs: {
             "results": [{
-                "source_file": "/tmp/a.mp4",
+                "source_file": str(source),
                 "start_time": 1.0,
                 "end_time": 4.0,
                 "similarity_score": 0.9,
@@ -106,23 +199,63 @@ def test_search_endpoint_and_validation(monkeypatch):
             "message": "",
         },
     )
-    client = TestClient(create_app())
 
+    client = TestClient(create_app())
     ok = client.post(
         "/api/search",
-        json={"query": "red car", "results": 3, "threshold": 0.41},
+        json={"query": "red car", "results": 3, "threshold": 0.41, "rerank": True},
     )
     assert ok.status_code == 200
-    payload = ok.json()
-    assert len(payload["results"]) == 1
-    assert payload["results"][0]["similarity_score"] == 0.9
-    assert payload["results"][0]["preview_url"].startswith("/api/media/")
+    preview_url = ok.json()["results"][0]["preview_url"]
 
-    preview = client.get(payload["results"][0]["preview_url"])
-    assert preview.status_code == 404  # token exists but source file in test is synthetic path
+    media = client.get(f"{preview_url}?start=1.0&end=4.0")
+    assert media.status_code == 200
+    assert media.content == b"preview-bytes"
+    assert captured["source_file"] == str(source)
+    assert captured["start_time"] == 1.0
+    assert captured["end_time"] == 4.0
 
-    bad = client.post("/api/search", json={"query": ""})
-    assert bad.status_code == 422
+
+def test_search_endpoint_passes_rerank(monkeypatch):
+    calls = []
+
+    def _fake_run_search(**kwargs):
+        calls.append(kwargs)
+        return {
+            "results": [],
+            "backend": "local",
+            "model": "qwen2b",
+            "threshold": kwargs["threshold"],
+            "best_score": None,
+            "low_confidence": False,
+            "message": "No results found.",
+        }
+
+    monkeypatch.setattr("sentrysearch.webapp.run_search", _fake_run_search)
+    client = TestClient(create_app())
+
+    resp = client.post(
+        "/api/search",
+        json={"query": "red car", "results": 3, "recall": 9, "threshold": 0.41, "rerank": True},
+    )
+    assert resp.status_code == 200
+    assert calls[0]["rerank"] is True
+    assert calls[0]["recall"] == 9
+
+
+def test_search_endpoint_returns_reranker_error(monkeypatch):
+    def _raise(**kwargs):
+        raise RerankerError("missing reranker model")
+
+    monkeypatch.setattr("sentrysearch.webapp.run_search", _raise)
+    client = TestClient(create_app())
+
+    resp = client.post(
+        "/api/search",
+        json={"query": "red car", "results": 3, "threshold": 0.41, "rerank": True},
+    )
+    assert resp.status_code == 503
+    assert "missing reranker model" in resp.json()["detail"]
 
 
 def test_index_job_lifecycle(monkeypatch, tmp_path):

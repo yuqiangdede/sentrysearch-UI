@@ -9,6 +9,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from .paths import TEMP_DIR, ensure_dir
+
 SUPPORTED_VIDEO_EXTENSIONS = (".mp4", ".mov")
 
 
@@ -24,7 +26,8 @@ def _ffmpeg_runs(path: str) -> bool:
     exits 0 for ``-version`` but cannot access the real filesystem.
     """
     try:
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+        ensure_dir(TEMP_DIR)
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False, dir=TEMP_DIR) as tmp:
             probe_path = tmp.name
         try:
             result = subprocess.run(
@@ -79,6 +82,77 @@ def _parse_duration_from_ffmpeg_output(stderr_text: str) -> float:
 
     hours, minutes, seconds = match.groups()
     return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+
+
+def _run_chunk_ffmpeg(
+    ffmpeg_exe: str,
+    video_path: str,
+    start: float,
+    length: float,
+    chunk_path: str,
+) -> str:
+    """Extract one chunk with ffmpeg, falling back to re-encoding if needed."""
+    base_cmd = [
+        ffmpeg_exe,
+        "-y",
+        "-ss", str(start),
+        "-i", video_path,
+        "-t", str(length),
+        "-map", "0:v:0",
+        "-an",
+        "-sn",
+        "-dn",
+    ]
+
+    # Attempt 1: fast stream copy. This is the common case and keeps indexing
+    # fast when the source codec/timebase allows it.
+    copy_result = subprocess.run(
+        [*base_cmd, "-c", "copy", chunk_path],
+        capture_output=True,
+        text=True,
+    )
+    if copy_result.returncode == 0 and os.path.isfile(chunk_path) and os.path.getsize(chunk_path) > 0:
+        return chunk_path
+
+    # Attempt 2: re-encode with output seeking. Slower, but much more tolerant
+    # of GOP boundaries and odd source files on Windows.
+    reencode_result = subprocess.run(
+        [
+            ffmpeg_exe,
+            "-y",
+            "-i", video_path,
+            "-ss", str(start),
+            "-t", str(length),
+            "-map", "0:v:0",
+            "-an",
+            "-sn",
+            "-dn",
+            "-c:v", "mpeg4",
+            "-q:v", "5",
+            chunk_path,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if reencode_result.returncode == 0 and os.path.isfile(chunk_path) and os.path.getsize(chunk_path) > 0:
+        return chunk_path
+
+    # Attempt 3: copy again with output seeking. Some files tolerate this
+    # arrangement better than input seeking.
+    final_result = subprocess.run(
+        [ffmpeg_exe, "-y", "-i", video_path, "-ss", str(start), "-t", str(length),
+         "-map", "0:v:0", "-an", "-sn", "-dn", "-c", "copy", chunk_path],
+        capture_output=True,
+        text=True,
+    )
+    if final_result.returncode == 0 and os.path.isfile(chunk_path) and os.path.getsize(chunk_path) > 0:
+        return chunk_path
+
+    raise RuntimeError(
+        f"Failed to extract chunk from {video_path}.\n"
+        f"Tried 3 different ffmpeg approaches but none succeeded.\n\n"
+        f"ffmpeg stderr from last attempt:\n{final_result.stderr}"
+    )
 
 
 def _get_video_duration(video_path: str) -> float:
@@ -139,25 +213,13 @@ def chunk_video(
         raise FileNotFoundError(f"Video file not found: {video_path}")
     ffmpeg_exe = _get_ffmpeg_executable()
     duration = _get_video_duration(video_path)
-    tmp_dir = tempfile.mkdtemp(prefix="sentrysearch_")
+    tmp_dir = tempfile.mkdtemp(prefix="sentrysearch_", dir=ensure_dir(TEMP_DIR))
     step = chunk_duration - overlap
     chunks = []
 
     if duration <= chunk_duration:
         chunk_path = os.path.join(tmp_dir, "chunk_000.mp4")
-        subprocess.run(
-            [
-                ffmpeg_exe,
-                "-y",
-                "-ss", "0",
-                "-i", video_path,
-                "-t", str(duration),
-                "-c", "copy",
-                chunk_path,
-            ],
-            capture_output=True,
-            check=True,
-        )
+        _run_chunk_ffmpeg(ffmpeg_exe, video_path, 0.0, duration, chunk_path)
         # Note: Caller is responsible for cleaning up chunk_path files
         return [
             {
@@ -174,21 +236,7 @@ def chunk_video(
         end = min(start + chunk_duration, duration)
         t = end - start
         chunk_path = os.path.join(tmp_dir, f"chunk_{idx:03d}.mp4")
-
-        # Input seeking (-ss before -i) for fast seek
-        subprocess.run(
-            [
-                ffmpeg_exe,
-                "-y",
-                "-ss", str(start),
-                "-i", video_path,
-                "-t", str(t),
-                "-c", "copy",
-                chunk_path,
-            ],
-            capture_output=True,
-            check=True,
-        )
+        _run_chunk_ffmpeg(ffmpeg_exe, video_path, start, t, chunk_path)
 
         chunks.append(
             {
@@ -260,7 +308,7 @@ def is_still_frame_chunk(
         f2 = 2 * total_frames // 3
 
         # Extract 3 frames as JPEG
-        tmp_dir = tempfile.mkdtemp(prefix="sentrysearch_still_")
+        tmp_dir = tempfile.mkdtemp(prefix="sentrysearch_still_", dir=ensure_dir(TEMP_DIR))
         out_pattern = os.path.join(tmp_dir, "frame_%03d.jpg")
 
         subprocess.run(
@@ -335,8 +383,7 @@ def preprocess_chunk(
                 "-vf", f"scale=-2:{target_resolution},fps={target_fps}",
                 "-c:v", "libx264",
                 "-crf", "28",
-                "-c:a", "aac",
-                "-b:a", "64k",
+                "-an",
                 out_path,
             ],
             capture_output=True,

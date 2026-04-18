@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 
 from .chunker import _get_ffmpeg_executable, _get_video_duration
 from .metadata import extract_metadata
+from .paths import TEMP_DIR, ensure_dir
 
 
 @functools.lru_cache(maxsize=1)
@@ -485,7 +486,11 @@ def apply_overlay(
         video_height=height,
     )
 
-    ass_fd, ass_path = tempfile.mkstemp(suffix=".ass", prefix="sentrysearch_")
+    ass_fd, ass_path = tempfile.mkstemp(
+        suffix=".ass",
+        prefix="sentrysearch_",
+        dir=ensure_dir(TEMP_DIR),
+    )
     try:
         with os.fdopen(ass_fd, "w") as f:
             f.write(ass_content)

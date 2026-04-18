@@ -12,6 +12,11 @@ import importlib.util
 from pathlib import Path
 
 from .base_embedder import BaseEmbedder
+from .paths import HF_CACHE_DIR, MODELS_DIR, PROJECT_ROOT
+
+os.environ.setdefault("HF_HOME", str(HF_CACHE_DIR))
+os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(HF_CACHE_DIR / "hub"))
+os.environ.setdefault("TRANSFORMERS_CACHE", str(HF_CACHE_DIR / "transformers"))
 
 
 class LocalModelError(RuntimeError):
@@ -26,8 +31,8 @@ MODEL_ALIASES: dict[str, str] = {
 
 # Reverse lookup: full HuggingFace ID → short alias
 _REVERSE_ALIASES: dict[str, str] = {v: k for k, v in MODEL_ALIASES.items()}
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-LOCAL_QWEN2B_DIR = PROJECT_ROOT / "models" / "Qwen3-VL-Embedding-2B"
+LOCAL_QWEN2B_DIR = MODELS_DIR / "Qwen3-VL-Embedding-2B"
+LOCAL_QWEN8B_DIR = MODELS_DIR / "Qwen3-VL-Embedding-8B"
 
 
 def _is_qwen2b_reference(model: str) -> bool:
@@ -54,14 +59,21 @@ def detect_default_model() -> str:
 
 
 def _ensure_qwen_video_reader_backend() -> str | None:
-    """Prefer decord for qwen_vl_utils video decoding when available."""
+    """Select a qwen_vl_utils video reader backend that is known to work.
+
+    qwen_vl_utils prefers torchcodec when it is importable. On Windows that
+    can produce noisy DLL-load failures when torchcodec is installed but its
+    native dependencies are missing. We therefore pin the backend to decord
+    when available and otherwise fall back to torchvision explicitly.
+    """
     forced = os.environ.get("FORCE_QWENVL_VIDEO_READER")
     if forced:
         return forced
     if importlib.util.find_spec("decord") is not None:
         os.environ["FORCE_QWENVL_VIDEO_READER"] = "decord"
         return "decord"
-    return None
+    os.environ["FORCE_QWENVL_VIDEO_READER"] = "torchvision"
+    return "torchvision"
 
 
 class LocalEmbedder(BaseEmbedder):
@@ -73,19 +85,42 @@ class LocalEmbedder(BaseEmbedder):
         dimensions: int = 768,
         quantize: bool | None = None,
     ):
-        self._model_name = self._resolve_model_reference(model_name)
+        self._model_name = self._public_model_name(model_name)
+        self._model_ref = self._resolve_model_reference(model_name)
         self._dimensions = dimensions
         self._quantize = quantize  # None = auto-detect
         self._model = None
         self._processor = None
 
     @staticmethod
+    def _public_model_name(model_name: str) -> str:
+        """Return the user-visible model name used by tests and logs."""
+        canonical = normalize_model_key(model_name)
+        if canonical == "qwen2b" and LOCAL_QWEN2B_DIR.exists():
+            return str(LOCAL_QWEN2B_DIR.resolve())
+        if canonical == "qwen8b":
+            return MODEL_ALIASES["qwen8b"]
+        return model_name
+
+    @staticmethod
     def _resolve_model_reference(model_name: str) -> str:
         """Resolve aliases to a local project path when possible."""
         canonical = normalize_model_key(model_name)
-        if canonical == "qwen2b" and LOCAL_QWEN2B_DIR.exists():
-            return str(LOCAL_QWEN2B_DIR)
-        return MODEL_ALIASES.get(canonical, model_name)
+        if canonical == "qwen2b":
+            if LOCAL_QWEN2B_DIR.exists():
+                return str(LOCAL_QWEN2B_DIR.resolve())
+            return model_name
+        if canonical == "qwen8b":
+            if LOCAL_QWEN8B_DIR.exists():
+                return str(LOCAL_QWEN8B_DIR.resolve())
+            return model_name
+
+        candidate = Path(model_name)
+        if not candidate.is_absolute():
+            candidate = (PROJECT_ROOT / candidate).resolve()
+        if candidate.exists():
+            return str(candidate)
+        return model_name
 
     def _load_model(self):
         if self._model is not None:
@@ -111,25 +146,7 @@ class LocalEmbedder(BaseEmbedder):
             ) from e
 
         # Prefer the project-local model directory when available.
-        try:
-            is_local_path = Path(self._model_name).exists()
-            if is_local_path:
-                print(f"Loading local model from {self._model_name}...", file=sys.stderr)
-            else:
-                from huggingface_hub import try_to_load_from_cache
-                cached = try_to_load_from_cache(self._model_name, "config.json")
-                is_cached = cached is not None and not isinstance(cached, str) or (isinstance(cached, str) and os.path.exists(cached))
-                if is_cached:
-                    print(f"Loading {self._model_name}...", file=sys.stderr)
-                else:
-                    print(
-                        f"Downloading {self._model_name} (this only happens once)...",
-                        file=sys.stderr,
-                    )
-        except Exception:
-            print(
-                f"Loading {self._model_name}...", file=sys.stderr,
-            )
+        print(f"Loading local model from {self._model_ref}...", file=sys.stderr)
 
         # Determine device and dtype
         if torch.cuda.is_available():
@@ -233,7 +250,7 @@ class LocalEmbedder(BaseEmbedder):
 
         try:
             self._processor = Qwen3VLProcessor.from_pretrained(
-                self._model_name, padding_side="right",
+                self._model_ref, padding_side="right",
             )
 
             load_kwargs = dict(trust_remote_code=True)
@@ -243,7 +260,7 @@ class LocalEmbedder(BaseEmbedder):
                 load_kwargs["torch_dtype"] = dtype
 
             self._model = _Qwen3VLForEmbedding.from_pretrained(
-                self._model_name, **load_kwargs,
+                self._model_ref, **load_kwargs,
             )
             if quantization_config is None:
                 self._model = self._model.to(device)
