@@ -1,14 +1,26 @@
 __pycache__/
+*.pyc
 .env
 
-test_footage/
-sentrysearch.egg-info/
-clips_output/
-
-notebooks/
-
-# Testing
+.idea/
+.omx/
+.venv/
 .pytest_cache/
+
+models/
+uploads/
+test_footage/
+clips_output/
+notebooks/
+natural-language-video-search/
+
+tmp_*.py
+tmp_*.js
+tmp_*.log
+*.log
+
+sentrysearch.egg-info/
+
 htmlcov/
 coverage.xml
 .coverage

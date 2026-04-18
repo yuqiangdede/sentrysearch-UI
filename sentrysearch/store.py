@@ -1,6 +1,7 @@
 """ChromaDB vector store."""
 
 import hashlib
+from functools import lru_cache
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -34,7 +35,7 @@ def detect_index(db_path: str | Path | None = None) -> tuple[str | None, str | N
     db_path = str(db_path or DEFAULT_DB_PATH)
     if not Path(db_path).exists():
         return None, None
-    client = chromadb.PersistentClient(path=db_path)
+    client = _get_persistent_client(db_path)
     existing = {c.name for c in client.list_collections()}
 
     # Gemini first (default / legacy)
@@ -76,6 +77,17 @@ def _make_chunk_id(source_file: str, start_time: float) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
+@lru_cache(maxsize=8)
+def _get_persistent_client(db_path: str) -> chromadb.ClientAPI:
+    """Return a cached persistent client for *db_path*.
+
+    Chroma 1.5.x can misbehave when many short-lived PersistentClient objects
+    are created and released in the same process. Reusing one client per
+    database path avoids those teardown bugs.
+    """
+    return chromadb.PersistentClient(path=db_path)
+
+
 class SentryStore:
     """Persistent vector store backed by ChromaDB."""
 
@@ -83,7 +95,7 @@ class SentryStore:
                  model: str | None = None):
         db_path = str(db_path or DEFAULT_DB_PATH)
         Path(db_path).mkdir(parents=True, exist_ok=True)
-        self._client = chromadb.PersistentClient(path=db_path)
+        self._client = _get_persistent_client(db_path)
         self._backend = backend
         self._model = model
         # Separate collection per backend+model so incompatible vectors never mix.

@@ -235,8 +235,8 @@ def init():
 @click.option("--backend", type=click.Choice(["gemini", "local"]), default=None,
               help="Embedding backend (default: gemini, or local when --model is set).")
 @click.option("--model", default=None, show_default=False,
-              help="Model for local backend: qwen8b, qwen2b, or HuggingFace ID "
-                   "(default: auto-detect from hardware). Implies --backend local.")
+              help="Model for local backend: qwen2b or a local project path "
+                   "(default: project-local 2B). Implies --backend local.")
 @click.option("--quantize/--no-quantize", default=None,
               help="Enable/disable 4-bit quantization for local backend (default: auto-detect).")
 @click.option("--verbose", is_flag=True, help="Show debug info.")
@@ -404,7 +404,7 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution,
 @click.option("--backend", type=click.Choice(["gemini", "local"]), default=None,
               help="Embedding backend (auto-detected from index if omitted).")
 @click.option("--model", default=None, show_default=False,
-              help="Model for local backend: qwen8b, qwen2b, or HuggingFace ID "
+              help="Model for local backend: qwen2b or a local project path "
                    "(default: auto-detect from index). Implies --backend local.")
 @click.option("--quantize/--no-quantize", default=None,
               help="Enable/disable 4-bit quantization for local backend (default: auto-detect).")
@@ -686,3 +686,23 @@ def remove(files, backend, model):
 
     if total_removed:
         click.echo(f"\nTotal: removed {total_removed} chunks.")
+
+
+# -----------------------------------------------------------------------
+# web
+# -----------------------------------------------------------------------
+
+@cli.command()
+@click.option("--host", default="127.0.0.1", show_default=True, help="Host to bind.")
+@click.option("--port", default=8000, show_default=True, type=int, help="Port to bind.")
+@click.option("--reload", is_flag=True, help="Enable auto-reload for development.")
+def web(host, port, reload):
+    """Start local web console."""
+    from .webapp import run_web_server
+
+    click.echo(f"Starting SentrySearch web console at http://{host}:{port}")
+    run_web_server(host=host, port=port, reload=reload)
+
+
+if __name__ == "__main__":
+    cli()

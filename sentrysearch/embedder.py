@@ -20,7 +20,7 @@ def get_embedder(backend: str = "gemini", **kwargs) -> BaseEmbedder:
             _current_embedder = GeminiEmbedder()
         elif backend == "local":
             from .local_embedder import LocalEmbedder
-            model = kwargs.get("model", "qwen8b")
+            model = kwargs.get("model", "qwen2b")
             dims = kwargs.get("dimensions", 768)
             quantize = kwargs.get("quantize", None)
             _current_embedder = LocalEmbedder(model_name=model, dimensions=dims, quantize=quantize)

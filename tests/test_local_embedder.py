@@ -1,12 +1,19 @@
-"""Tests for sentrysearch.local_embedder (mocked — no torch required)."""
+"""Tests for sentrysearch.local_embedder (mocked - no torch required)."""
 
+import os
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from sentrysearch.local_embedder import (
-    LocalEmbedder, LocalModelError, MODEL_ALIASES,
-    normalize_model_key, detect_default_model,
+    LOCAL_QWEN2B_DIR,
+    MODEL_ALIASES,
+    LocalEmbedder,
+    LocalModelError,
+    _ensure_qwen_video_reader_backend,
+    detect_default_model,
+    normalize_model_key,
 )
 
 
@@ -17,7 +24,7 @@ class TestModelAliases:
 
     def test_qwen2b_alias_resolves(self):
         embedder = LocalEmbedder(model_name="qwen2b")
-        assert embedder._model_name == "Qwen/Qwen3-VL-Embedding-2B"
+        assert embedder._model_name == str(LOCAL_QWEN2B_DIR)
 
     def test_full_hf_id_passed_through(self):
         embedder = LocalEmbedder(model_name="Qwen/Qwen3-VL-Embedding-8B")
@@ -44,7 +51,7 @@ class TestLocalModelError:
 class TestLocalEmbedderConstruction:
     def test_default_params(self):
         embedder = LocalEmbedder()
-        assert embedder._model_name == "Qwen/Qwen3-VL-Embedding-8B"  # resolved from "qwen8b"
+        assert embedder._model_name == str(LOCAL_QWEN2B_DIR)
         assert embedder._dimensions == 768
         assert embedder._model is None
 
@@ -80,7 +87,6 @@ class TestLocalEmbedderLoadModel:
     def test_load_model_called_once(self):
         embedder = LocalEmbedder()
         embedder._model = MagicMock()  # pretend already loaded
-        # Should return immediately without reloading
         embedder._load_model()
 
 
@@ -98,18 +104,17 @@ class TestNormalizeModelKey:
 
 
 class TestDetectDefaultModel:
-    def test_no_torch_returns_qwen8b(self):
+    def test_no_torch_returns_qwen2b(self):
         with patch.dict("sys.modules", {"torch": None}):
-            # ImportError path
             result = detect_default_model()
-            assert result == "qwen8b"
+            assert result == "qwen2b"
 
-    def test_cuda_returns_qwen8b(self):
+    def test_cuda_returns_qwen2b(self):
         mock_torch = MagicMock()
         mock_torch.cuda.is_available.return_value = True
         with patch.dict("sys.modules", {"torch": mock_torch}):
             result = detect_default_model()
-            assert result == "qwen8b"
+            assert result == "qwen2b"
 
     def test_cpu_only_returns_qwen2b(self):
         mock_torch = MagicMock()
@@ -118,6 +123,25 @@ class TestDetectDefaultModel:
         with patch.dict("sys.modules", {"torch": mock_torch}):
             result = detect_default_model()
             assert result == "qwen2b"
+
+
+class TestVideoReaderBackend:
+    def test_prefers_decord_when_available(self):
+        with patch.dict(os.environ, {}, clear=True), patch(
+            "sentrysearch.local_embedder.importlib.util.find_spec",
+            return_value=object(),
+        ):
+            backend = _ensure_qwen_video_reader_backend()
+            assert backend == "decord"
+            assert os.environ["FORCE_QWENVL_VIDEO_READER"] == "decord"
+
+    def test_preserves_existing_setting(self):
+        with patch.dict(os.environ, {"FORCE_QWENVL_VIDEO_READER": "torchvision"}, clear=True), patch(
+            "sentrysearch.local_embedder.importlib.util.find_spec",
+            return_value=object(),
+        ):
+            backend = _ensure_qwen_video_reader_backend()
+            assert backend == "torchvision"
 
 
 class TestLocalEmbedderMethods:

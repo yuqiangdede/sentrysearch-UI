@@ -10,6 +10,10 @@ dependencies = [
     "google-genai>=1.0",
     "imageio-ffmpeg>=0.5",
     "protobuf>=4.0,<7",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
@@ -53,6 +57,18 @@ constraint-dependencies = [
     "opentelemetry-exporter-otlp-proto-grpc>=1.25.0",
     "opentelemetry-proto>=1.25.0",
 ]
+
+# PyPI ships CPU-only torch wheels on Windows, so users with NVIDIA GPUs would
+# silently get a CPU build. Pull from PyTorch's CUDA index on Windows only;
+# Linux already gets CUDA-enabled wheels from PyPI, and macOS needs PyPI for MPS.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu124", marker = "sys_platform == 'win32'" }]
+torchvision = [{ index = "pytorch-cu124", marker = "sys_platform == 'win32'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
